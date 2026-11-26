@@ -7,7 +7,7 @@ import qrcode
 import zxingcpp
 from PIL import Image
 from io import BytesIO
-from datetime import datetime, date, time
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
@@ -45,14 +45,12 @@ st.markdown("""
     h1 {
         text-shadow: 0 0 12px rgba(168, 85, 247, 0.7);
     }
-    /* Alertas (info, warning, error, success) con fondo oscuro para que se lea el texto blanco */
     [data-testid="stAlert"], [data-testid="stAlert"] > div {
         background-color: #18181b !important;
         color: #ffffff !important;
         border: 1px solid #7e22ce !important;
         border-radius: 8px !important;
     }
-    /* Desplegable (Expander) con fondo oscuro */
     [data-testid="stExpander"] {
         background-color: #121217 !important;
         border: 1px solid #7e22ce !important;
@@ -67,7 +65,6 @@ st.markdown("""
         color: #22d3ee !important;
         font-weight: 700 !important;
     }
-    /* Botones principales y botón de cámara */
     .stButton > button[kind="primary"],
     .stFormSubmitButton > button,
     [data-testid="stCameraInputButton"] {
@@ -320,7 +317,7 @@ with tab1:
                 st.error("⛔ ENTRADA YA QUEMADA / UTILIZADA")
                 st.warning(f"**Titular:** {nombre} | **RUT:** {rut}\n\n**Evento:** {ev_qr}\n\n**Ingresó el:** {fecha_ing}")
             elif evento_activo != "Todos los eventos" and ev_qr != evento_activo:
-                st.error(f"🚫 ENTRADA DE OTRO EVENTO")
+                st.error("🚫 ENTRADA DE OTRO EVENTO")
                 st.warning(f"Este QR corresponde a **{ev_qr or 'Sin evento'}**, no a **{evento_activo}**.")
             elif caducada:
                 st.error("⌛ ENTRADA CADUCADA")

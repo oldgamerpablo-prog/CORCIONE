@@ -398,10 +398,10 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
 
     return enviar_mensaje_smtp(msg, destino_individual)
 
-def enviar_aviso_renominacion_titular_anterior(
-    destinatario_anterior,
-    nombre_anterior,
-    rut_anterior,
+def enviar_correo_aviso_renominacion_original(
+    destinatario_original,
+    nombre_original,
+    rut_original,
     nombre_nuevo,
     rut_nuevo,
     correo_nuevo,
@@ -415,52 +415,76 @@ def enviar_aviso_renominacion_titular_anterior(
     if not remitente:
         return False, "Falta configurar SMTP_EMAIL en Streamlit Secrets."
 
-    destino = str(destinatario_anterior).strip()
+    destino = str(destinatario_original).strip()
     if not destino or not correo_valido(destino):
-        return False, "Titular anterior sin correo válido."
+        return False, "La persona original no tiene correo válido registrado."
 
     msg = EmailMessage()
-    msg["Subject"] = f"Aviso de renominación de entrada ({codigo}) — {evento}"
+    msg["Subject"] = f"Tu entrada {codigo} fue renombrada — {evento}"
     msg["From"] = remitente
     msg["To"] = destino
 
     texto_plano = (
-        f"Hola {nombre_anterior},\n\n"
-        f"Te informamos que tu entrada para {evento} ha sido renombrada.\n"
-        f"• Folio de renominación: {codigo_ren}\n"
+        f"Hola {nombre_original},\n\n"
+        f"Te escribimos para avisarte que tu entrada para {evento} se renombró.\n"
         f"• Código del ticket: {codigo}\n"
+        f"• Registro de renominación: {codigo_ren}\n"
         f"• Motivo: {motivo}\n"
-        f"• Titular anterior: {nombre_anterior} (RUT: {rut_anterior})\n"
-        f"• Nuevo titular asignado: {nombre_nuevo} (RUT: {rut_nuevo} | Pase: {tipo_nuevo})\n\n"
-        f"A partir de esta actualización, el acceso en puerta se validará según el registro vigente del nuevo titular."
+        f"• Titular original: {nombre_original} (RUT: {rut_original})\n"
+        f"• Nuevo titular: {nombre_nuevo} (RUT: {rut_nuevo} | Correo: {correo_nuevo or 'No registrado'} | Pase: {tipo_nuevo})\n\n"
+        f"Desde este momento el registro vigente en puerta corresponde al nuevo titular."
     )
     msg.set_content(texto_plano)
+
+    logo_html = ""
+    logo_bytes = None
+    if os.path.exists("logo.png"):
+        try:
+            with open("logo.png", "rb") as f_logo:
+                logo_bytes = f_logo.read()
+            logo_html = '<img src="cid:logo_kalma" alt="Colectivo Kalma" style="max-width:200px; height:auto; display:block; margin:0 auto 10px auto;" />'
+        except Exception:
+            logo_bytes = None
+
+    if not logo_html:
+        logo_html = '<div style="font-size:20px; font-weight:800; letter-spacing:2px; color:#ffffff; margin-bottom:6px;">COLECTIVO KALMA</div>'
 
     html_cuerpo = f"""
     <!DOCTYPE html>
     <html>
     <body style="margin:0; padding:24px; background-color:#09090b; font-family:Arial, Helvetica, sans-serif; color:#f4f4f5;">
-      <div style="max-width:560px; margin:0 auto; background:linear-gradient(160deg,#181026 0%,#10131f 100%); border:1px solid #9333ea; border-radius:16px; padding:24px;">
-        <h2 style="margin:0 0 10px 0; color:#22d3ee;">Aviso de Renominación de Entrada</h2>
-        <p style="margin:0 0 14px 0; font-size:14px; line-height:1.6; color:#e4e4e7;">
-          Hola <strong>{nombre_anterior}</strong>, te confirmamos que la entrada asociada al código
-          <strong style="color:#22d3ee;">{codigo}</strong> para el evento <strong>{evento}</strong> ha sido renombrada.
-        </p>
-        <div style="background-color:#0d0e16; border:1px solid #3f3f46; border-radius:12px; padding:14px 16px; font-size:13px; line-height:1.7;">
-          <div><strong style="color:#a855f7;">Folio:</strong> {codigo_ren}</div>
-          <div><strong style="color:#a855f7;">Motivo:</strong> {motivo}</div>
-          <div><strong style="color:#a855f7;">Titular anterior:</strong> {nombre_anterior} ({rut_anterior})</div>
-          <div><strong style="color:#a855f7;">Nuevo titular:</strong> <span style="color:#22d3ee; font-weight:bold;">{nombre_nuevo}</span> ({rut_nuevo})</div>
-          <div><strong style="color:#a855f7;">Tipo de pase:</strong> {tipo_nuevo}</div>
+      <div style="max-width:560px; margin:0 auto; background:linear-gradient(160deg,#181026 0%,#10131f 100%); border:1px solid #9333ea; border-radius:16px; overflow:hidden;">
+        <div style="padding:20px 24px; text-align:center; background-color:#130c1f; border-bottom:1px solid #2e1065;">
+          {logo_html}
+          <div style="font-size:11px; letter-spacing:2px; color:#22d3ee; text-transform:uppercase; font-weight:bold;">
+            NOTIFICACIÓN DE CAMBIO DE TITULAR
+          </div>
         </div>
-        <p style="margin:14px 0 0 0; font-size:12px; color:#a1a1aa;">
-          El registro vigente en puerta queda asignado al nuevo titular indicado.
-        </p>
+        <div style="padding:24px;">
+          <h2 style="margin:0 0 10px 0; font-size:20px; color:#ffffff;">Hola, {nombre_original}</h2>
+          <p style="margin:0 0 16px 0; font-size:14px; line-height:1.6; color:#e4e4e7;">
+            Te avisamos que se realizó la renominación de tu entrada para <strong style="color:#22d3ee;">{evento}</strong>.
+          </p>
+          <div style="background-color:#0d0e16; border:1px solid #3f3f46; border-radius:12px; padding:14px 16px; font-size:13px; line-height:1.7;">
+            <div><strong style="color:#a855f7;">Código QR:</strong> <span style="color:#ffffff;">{codigo}</span></div>
+            <div><strong style="color:#a855f7;">Folio de seguimiento:</strong> <span style="color:#22d3ee; font-weight:bold;">{codigo_ren}</span></div>
+            <div><strong style="color:#a855f7;">Motivo:</strong> <span style="color:#ffffff;">{motivo}</span></div>
+            <div><strong style="color:#a855f7;">Titular original:</strong> <span style="color:#ffffff;">{nombre_original} ({rut_original})</span></div>
+            <div><strong style="color:#a855f7;">Nuevo titular:</strong> <span style="color:#22d3ee; font-weight:bold;">{nombre_nuevo}</span> ({rut_nuevo})</div>
+            <div><strong style="color:#a855f7;">Tipo de pase:</strong> <span style="color:#ffffff;">{tipo_nuevo}</span></div>
+          </div>
+          <p style="margin:14px 0 0 0; font-size:12px; line-height:1.5; color:#a1a1aa;">
+            La entrada queda registrada a nombre del nuevo titular para el control de acceso en puerta.
+          </p>
+        </div>
       </div>
     </body>
     </html>
     """
     msg.add_alternative(html_cuerpo, subtype="html")
+    if logo_bytes:
+        msg.get_payload()[1].add_related(logo_bytes, maintype="image", subtype="png", cid="<logo_kalma>")
+
     return enviar_mensaje_smtp(msg, destino)
 
 def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto):
@@ -1257,7 +1281,7 @@ elif st.session_state.rol_sesion == "admin":
 
     elif st.session_state.vista_admin == "renominar":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
-        st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos enviando aviso al titular anterior y E-Ticket al titular actual.")
+        st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos enviando aviso al titular original y E-Ticket al titular actual.")
 
         if st.session_state.get("ren_msg_exito"):
             st.success(st.session_state.pop("ren_msg_exito"))
@@ -1416,7 +1440,7 @@ elif st.session_state.rol_sesion == "admin":
 
                             avisos_envio = []
                             if correo_ant_val and correo_valido(correo_ant_val):
-                                ok_ant, det_ant = enviar_aviso_renominacion_titular_anterior(
+                                ok_ant, det_ant = enviar_correo_aviso_renominacion_original(
                                     correo_ant_val,
                                     nombre_ant_val,
                                     rut_ant_val,
@@ -1430,11 +1454,11 @@ elif st.session_state.rol_sesion == "admin":
                                     motivo_ren,
                                 )
                                 if ok_ant:
-                                    avisos_envio.append(f"Aviso enviado al titular anterior ({correo_ant_val}).")
+                                    avisos_envio.append(f"Aviso de cambio enviado a la persona original ({correo_ant_val}).")
                                 else:
-                                    avisos_envio.append(f"No se pudo enviar aviso al titular anterior: {det_ant}")
+                                    avisos_envio.append(f"No se pudo enviar aviso a la persona original: {det_ant}")
                             else:
-                                avisos_envio.append("El titular anterior no tenía correo válido registrado.")
+                                avisos_envio.append("La persona original no tenía correo válido registrado.")
 
                             if correo_nue_val:
                                 ticket_nuevo_bytes = generar_tarjeta_qr_bytes(
@@ -1456,11 +1480,11 @@ elif st.session_state.rol_sesion == "admin":
                                     ticket_nuevo_bytes,
                                 )
                                 if ok_nue:
-                                    avisos_envio.append(f"E-Ticket enviado al titular actual ({correo_nue_val}).")
+                                    avisos_envio.append(f"E-Ticket enviado a la persona actual ({correo_nue_val}).")
                                 else:
-                                    avisos_envio.append(f"No se pudo enviar E-Ticket al titular actual: {det_nue}")
+                                    avisos_envio.append(f"No se pudo enviar E-Ticket a la persona actual: {det_nue}")
                             else:
-                                avisos_envio.append("No se ingresó correo para el titular actual.")
+                                avisos_envio.append("No se ingresó correo para la persona actual.")
 
                             nuevo_reset = st.session_state.ren_reset_id + 1
                             st.session_state.ren_reset_id = nuevo_reset

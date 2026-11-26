@@ -45,6 +45,29 @@ st.markdown("""
     h1 {
         text-shadow: 0 0 12px rgba(168, 85, 247, 0.7);
     }
+    /* Alertas (info, warning, error, success) con fondo oscuro para que se lea el texto blanco */
+    [data-testid="stAlert"], [data-testid="stAlert"] > div {
+        background-color: #18181b !important;
+        color: #ffffff !important;
+        border: 1px solid #7e22ce !important;
+        border-radius: 8px !important;
+    }
+    /* Desplegable (Expander) con fondo oscuro */
+    [data-testid="stExpander"] {
+        background-color: #121217 !important;
+        border: 1px solid #7e22ce !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stExpander"] summary, [data-testid="stExpander"] summary:hover {
+        background-color: #1e1b4b !important;
+        color: #ffffff !important;
+        border-radius: 8px !important;
+    }
+    [data-testid="stExpander"] summary p {
+        color: #22d3ee !important;
+        font-weight: 700 !important;
+    }
+    /* Botones principales y botón de cámara */
     .stButton > button[kind="primary"],
     .stFormSubmitButton > button,
     [data-testid="stCameraInputButton"] {
@@ -71,9 +94,7 @@ st.markdown("""
         border-radius: 8px !important;
     }
     .stTextInput > div > div > input,
-    .stSelectbox > div > div,
-    .stDateInput > div > div > input,
-    .stTimeInput > div > div > input {
+    .stSelectbox > div > div {
         background-color: #18181b !important;
         color: #ffffff !important;
         border: 1px solid #7e22ce !important;
@@ -185,7 +206,6 @@ def init_db():
             caducidad TEXT
         )
     """)
-    # Actualizar tablas antiguas si faltan columnas nuevas
     c.execute("PRAGMA table_info(entradas)")
     columnas = [col[1] for col in c.fetchall()]
     if "creado_por" not in columnas:
@@ -287,7 +307,6 @@ with tab1:
         else:
             cod, nombre, rut, tipo, estado, fecha_ing, creado_por, ev_qr, cad_qr = entrada
 
-            # Verificar si está caducada
             caducada = False
             if cad_qr:
                 try:
@@ -332,7 +351,6 @@ with tab2:
     if pedir_acceso_admin("tab2"):
         st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
 
-        # --- CREAR / GUARDAR NUEVO EVENTO ---
         with st.expander("➕ CREAR O EDITAR EVENTO (QUEDA GUARDADO)", expanded=(len(obtener_eventos()) == 0)):
             with st.form("form_nuevo_evento", clear_on_submit=True):
                 col_ev, col_fec, col_hor = st.columns([2, 1.2, 1])
@@ -361,12 +379,10 @@ with tab2:
         if not eventos_guardados:
             st.warning("Primero crea y guarda al menos un evento en el menú de arriba ⬆️.")
         else:
-            # Selector tipo filtro Excel + Fecha/Hora al lado (se autocompleta según el evento)
             col_sel_ev, col_sel_fec, col_sel_hor = st.columns([2, 1.2, 1])
             with col_sel_ev:
                 evento_elegido = st.selectbox("🎧 Evento (selecciona o escribe para filtrar):", list(eventos_guardados.keys()))
 
-            # Obtener fecha y hora guardadas de ese evento
             cad_guardada = eventos_guardados[evento_elegido]
             try:
                 dt_def = datetime.strptime(cad_guardada, "%Y-%m-%d %H:%M")
@@ -424,7 +440,6 @@ with tab3:
         st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
 
-        # Filtro por evento tipo Excel
         col_f1, col_f2 = st.columns([1.2, 1.8])
         with col_f1:
             lista_ev = ["Todos"] + sorted([e for e in df["evento"].dropna().unique() if e != ""])

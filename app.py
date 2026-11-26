@@ -66,6 +66,25 @@ st.markdown("""
         color: #22d3ee !important;
         font-weight: 700 !important;
     }
+    /* File uploader oscuro y legible */
+    [data-testid="stFileUploader"] section {
+        background-color: #121217 !important;
+        border: 1px dashed #9333ea !important;
+        border-radius: 10px !important;
+        color: #ffffff !important;
+    }
+    [data-testid="stFileUploader"] section span,
+    [data-testid="stFileUploader"] section small,
+    [data-testid="stFileUploader"] section div {
+        color: #e4e4e7 !important;
+    }
+    [data-testid="stFileUploader"] section button {
+        background-color: #2e1065 !important;
+        color: #ffffff !important;
+        border: 1px solid #9333ea !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+    }
     .stButton > button[kind="primary"],
     .stFormSubmitButton > button,
     [data-testid="stCameraInputButton"] {
@@ -153,6 +172,13 @@ st.markdown("""
         margin: 15px 0;
         box-shadow: 0 0 20px rgba(34, 211, 238, 0.25);
     }
+    .backup-box {
+        background-color: #121217;
+        border: 1px solid #3f3f46;
+        border-radius: 10px;
+        padding: 16px;
+        margin-top: 10px;
+    }
     [data-testid="stMetricValue"] {
         color: #22d3ee !important;
         text-shadow: 0 0 10px rgba(34, 211, 238, 0.4);
@@ -217,6 +243,7 @@ def init_db():
             codigo TEXT PRIMARY KEY,
             nombre TEXT,
             rut TEXT,
+            correo TEXT,
             tipo TEXT,
             estado TEXT,
             fecha_creacion TEXT,
@@ -234,6 +261,8 @@ def init_db():
     """)
     c.execute("PRAGMA table_info(entradas)")
     columnas = [col[1] for col in c.fetchall()]
+    if "correo" not in columnas:
+        c.execute("ALTER TABLE entradas ADD COLUMN correo TEXT DEFAULT ''")
     if "creado_por" not in columnas:
         c.execute("ALTER TABLE entradas ADD COLUMN creado_por TEXT DEFAULT ''")
     if "evento" not in columnas:
@@ -323,7 +352,7 @@ with tab1:
     if codigo_leido:
         c = conn.cursor()
         c.execute(
-            "SELECT codigo, nombre, rut, tipo, estado, fecha_ingreso, creado_por, evento, caducidad FROM entradas WHERE codigo = ?",
+            "SELECT codigo, nombre, rut, correo, tipo, estado, fecha_ingreso, creado_por, evento, caducidad FROM entradas WHERE codigo = ?",
             (codigo_leido,)
         )
         entrada = c.fetchone()
@@ -331,7 +360,7 @@ with tab1:
         if not entrada:
             st.error(f"❌ ACCESO DENEGADO: El código `{codigo_leido}` no existe.")
         else:
-            cod, nombre, rut, tipo, estado, fecha_ing, creado_por, ev_qr, cad_qr = entrada
+            cod, nombre, rut, correo, tipo, estado, fecha_ing, creado_por, ev_qr, cad_qr = entrada
 
             caducada = False
             if cad_qr:
@@ -357,8 +386,9 @@ with tab1:
                     <p style="color:#22d3ee !important; font-weight:bold; margin:0; letter-spacing:2px;">✅ ACCESO VÁLIDO — VERIFICAR CARNET</p>
                     <h2 style="margin:8px 0 4px 0;">👤 {nombre}</h2>
                     <h3 style="color:#a855f7 !important; margin:0 0 12px 0;">🪪 RUT: {rut}</h3>
-                    <p style="margin:0; font-size:14px;"><b>🎧 EVENTO:</b> {ev_qr if ev_qr else 'General'} &nbsp;|&nbsp; <b>🎟️ PASE:</b> {tipo}</p>
-                    <p style="margin:4px 0 0 0; font-size:13px; color:#f4f4f5 !important;"><b>⌛ Válido hasta:</b> {cad_qr if cad_qr else 'Sin límite'} &nbsp;|&nbsp; <b>🔑 ID:</b> {cod}</p>
+                    <p style="margin:0; font-size:14px;"><b>✉️ CORREO:</b> {correo if correo else 'No registrado'} &nbsp;|&nbsp; <b>🎟️ PASE:</b> {tipo}</p>
+                    <p style="margin:4px 0 0 0; font-size:14px;"><b>🎧 EVENTO:</b> {ev_qr if ev_qr else 'General'} &nbsp;|&nbsp; <b>🔑 ID:</b> {cod}</p>
+                    <p style="margin:4px 0 0 0; font-size:13px; color:#f4f4f5 !important;"><b>⌛ Válido hasta:</b> {cad_qr if cad_qr else 'Sin límite'}</p>
                     <p style="margin:4px 0 0 0; font-size:12px; color:#a1a1aa !important;">Generado por: {creado_por if creado_por else 'Sin registro'}</p>
                 </div>
                 """, unsafe_allow_html=True)
@@ -424,34 +454,35 @@ with tab2:
             with st.form("form_crear", clear_on_submit=True):
                 nombre = st.text_input("Nombre Completo")
                 rut = st.text_input("RUT / Carnet (ej: 12.345.678-9)")
+                correo = st.text_input("Correo Electrónico (ej: nombre@correo.com)")
                 tipo = st.selectbox("Tipo de Pase", ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"])
                 crear = st.form_submit_button("⚡ GENERAR E-TICKET QR", type="primary", use_container_width=True)
 
             if crear:
-                if nombre.strip() and rut.strip():
+                if nombre.strip() and rut.strip() and correo.strip():
                     codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                     ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                     caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
                     creador = st.session_state.admin_usuario
                     c = conn.cursor()
                     c.execute(
-                        "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (codigo_unico, nombre.strip(), rut.strip(), tipo, "DISPONIBLE", ahora_str, "", creador, evento_elegido, caducidad_final)
+                        "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (codigo_unico, nombre.strip(), rut.strip(), correo.strip(), tipo, "DISPONIBLE", ahora_str, "", creador, evento_elegido, caducidad_final)
                     )
                     conn.commit()
-                    st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), tipo, creador, evento_elegido, caducidad_final)
+                    st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), correo.strip(), tipo, creador, evento_elegido, caducidad_final)
                     st.success(f"E-Ticket emitido para **{nombre.strip()}** en **{evento_elegido}** (`{codigo_unico}`)")
                 else:
-                    st.error("Debes completar el Nombre y el RUT.")
+                    st.error("Debes completar el Nombre, el RUT y el Correo Electrónico.")
 
         if "ultimo_qr" in st.session_state:
-            cod, nom, rt, tp, cr, ev, cad = st.session_state["ultimo_qr"]
+            cod, nom, rt, cor, tp, cr, ev, cad = st.session_state["ultimo_qr"]
             qr_bytes = generar_imagen_qr(cod)
             st.divider()
-            st.write(f"**Último E-Ticket:** {nom} ({rt}) — **{ev}** ({tp}) | *Válido hasta: {cad}*")
+            st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
             st.image(qr_bytes, width=250)
             st.download_button(
-                label="📥 DESCARGAR QR PARA WHATSAPP",
+                label="📥 DESCARGAR QR PARA ENVIAR",
                 data=qr_bytes,
                 file_name=f"KALMA_{ev.replace(' ', '_')}_{nom.replace(' ', '_')}_{cod}.png",
                 mime="image/png",
@@ -471,7 +502,7 @@ with tab3:
             lista_ev = ["Todos"] + sorted([e for e in df["evento"].dropna().unique() if e != ""])
             filtro_ev = st.selectbox("🎧 Filtrar por Evento:", lista_ev)
         with col_f2:
-            busqueda = st.text_input("🔍 Buscar por Nombre, RUT o Productor:")
+            busqueda = st.text_input("🔍 Buscar por Nombre, RUT, Correo o Productor:")
 
         df_mostrar = df.copy()
         if filtro_ev != "Todos":
@@ -480,6 +511,7 @@ with tab3:
             df_mostrar = df_mostrar[
                 df_mostrar["nombre"].str.contains(busqueda, case=False, na=False) |
                 df_mostrar["rut"].str.contains(busqueda, case=False, na=False) |
+                df_mostrar["correo"].str.contains(busqueda, case=False, na=False) |
                 df_mostrar["creado_por"].str.contains(busqueda, case=False, na=False)
             ]
 
@@ -493,34 +525,41 @@ with tab3:
         st.divider()
         nombre_etiqueta = "todos_eventos" if filtro_ev == "Todos" else re.sub(r"[^A-Za-z0-9_-]+", "_", filtro_ev.strip())
         etiqueta_visible = "TODOS LOS EVENTOS" if filtro_ev == "Todos" else filtro_ev
-        st.markdown(f"**💾 DESCARGA DEL HISTORIAL — {etiqueta_visible}** *(Exporta lo filtrado actualmente en pantalla)*")
+
+        st.markdown("### 💾 HISTORIAL Y RESPALDO CSV")
+        st.markdown('<div class="backup-box">', unsafe_allow_html=True)
+        st.markdown(f"**1. Descargar historial ({etiqueta_visible})**")
         csv = df_mostrar.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            f"📥 DESCARGAR HISTORIAL ({etiqueta_visible})",
+            f"📥 DESCARGAR CSV — {etiqueta_visible}",
             data=csv,
             file_name=f"kalma_{nombre_etiqueta}_{ahora_chile().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
             use_container_width=True
         )
 
-        archivo_subido = st.file_uploader("📤 Restaurar base de datos desde CSV", type=["csv"])
+        st.divider()
+        st.markdown("**2. Restaurar registros desde CSV**")
+        archivo_subido = st.file_uploader("Selecciona un archivo CSV de respaldo", type=["csv"], label_visibility="collapsed")
         if archivo_subido is not None:
-            if st.button("CARGAR ENTRADAS DEL ARCHIVO", use_container_width=True):
+            if st.button("📤 CARGAR ENTRADAS DEL ARCHIVO", type="primary", use_container_width=True):
                 df_nuevo = pd.read_csv(archivo_subido).fillna("")
                 c = conn.cursor()
                 for _, row in df_nuevo.iterrows():
+                    correo_csv = row["correo"] if "correo" in df_nuevo.columns else ""
                     creador_csv = row["creado_por"] if "creado_por" in df_nuevo.columns else ""
                     evento_csv = row["evento"] if "evento" in df_nuevo.columns else ""
                     cad_csv = row["caducidad"] if "caducidad" in df_nuevo.columns else ""
                     c.execute(
-                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (row["codigo"], row["nombre"], row["rut"], row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv, evento_csv, cad_csv)
+                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row["codigo"], row["nombre"], row["rut"], correo_csv, row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv, evento_csv, cad_csv)
                     )
                     if evento_csv:
                         c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (evento_csv, cad_csv))
                 conn.commit()
                 st.success("Base de datos restaurada correctamente.")
                 st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
         st.divider()
         if st.button("🔒 BLOQUEAR ZONA DE PRODUCCIÓN", use_container_width=True):

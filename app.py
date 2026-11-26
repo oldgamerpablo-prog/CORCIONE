@@ -1,23 +1,42 @@
-import streamlit as st
-import streamlit.components.v1 as components
-import sqlite3
-import uuid
 import os
 import re
-import time as pytime
 import smtplib
+import time as pytime
+import uuid
+from datetime import date, datetime, time
 from email.message import EmailMessage
+from io import BytesIO
+from zoneinfo import ZoneInfo
+
+import gspread
 import pandas as pd
 import qrcode
+import streamlit as st
+import streamlit.components.v1 as components
 import zxingcpp
+from google.oauth2.service_account import Credentials
 from PIL import Image, ImageDraw, ImageFont
-from io import BytesIO
-from datetime import datetime, date, time
-from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
 
 USUARIOS_PRODUCCION_CONOCIDOS = {"Javi.martinez", "Eric.brito", "Piero.corci"}
+
+ENTRADAS_COLS = [
+    "codigo",
+    "nombre",
+    "rut",
+    "correo",
+    "tipo",
+    "estado",
+    "fecha_creacion",
+    "fecha_ingreso",
+    "creado_por",
+    "evento",
+    "caducidad",
+    "nota_renominacion",
+]
+EVENTOS_COLS = ["nombre", "caducidad"]
+
 
 # --- HORA LOCAL CHILE ---
 def ahora_chile():
@@ -26,12 +45,15 @@ def ahora_chile():
     except Exception:
         return datetime.now()
 
+
 def limpiar_nombre_archivo(texto):
     limpio = re.sub(r"[^A-Za-z0-9_-]+", "_", str(texto).strip())
     return limpio.strip("_") or "evento"
 
+
 def correo_valido(correo):
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", str(correo).strip()))
+
 
 def parece_fecha_hora(valor):
     texto = str(valor or "").strip()
@@ -41,6 +63,7 @@ def parece_fecha_hora(valor):
         re.match(r"^\d{4}-\d{2}-\d{2}(\s+\d{1,2}:\d{2}(:\d{2})?)?$", texto)
         or re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}(\s+\d{1,2}:\d{2}(:\d{2})?)?$", texto)
     )
+
 
 def parsear_fecha_excel(valor, fecha_defecto):
     if valor is None or str(valor).strip() == "" or pd.isna(valor):
@@ -60,6 +83,7 @@ def parsear_fecha_excel(valor, fecha_defecto):
         return dt_parsed.date()
     return fecha_defecto
 
+
 def parsear_hora_excel(valor, hora_defecto):
     if valor is None or str(valor).strip() == "" or pd.isna(valor):
         return hora_defecto
@@ -77,6 +101,7 @@ def parsear_hora_excel(valor, hora_defecto):
     if pd.notna(dt_parsed):
         return dt_parsed.time().replace(second=0, microsecond=0)
     return hora_defecto
+
 
 def normalizar_dataframe_por_encabezado(df_in):
     alias_encabezados = {
@@ -128,12 +153,14 @@ def normalizar_dataframe_por_encabezado(df_in):
 
     return df_mapeado[columnas_esperadas].fillna("")
 
+
 def generar_excel_bytes(df_data):
     df_ordenado = normalizar_dataframe_por_encabezado(df_data)
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_ordenado.to_excel(writer, index=False, sheet_name="Entradas")
     return buf.getvalue()
+
 
 def cargar_fuente(tamano, bold=False):
     candidatos = [
@@ -147,6 +174,7 @@ def cargar_fuente(tamano, bold=False):
             except Exception:
                 pass
     return ImageFont.load_default()
+
 
 def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
     qr = qrcode.QRCode(version=1, box_size=8, border=2)
@@ -219,6 +247,7 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
     tarjeta.save(buf, format="PNG")
     return buf.getvalue()
 
+
 def forzar_camara_trasera():
     components.html(
         """
@@ -251,6 +280,7 @@ def forzar_camara_trasera():
         height=0,
     )
 
+
 def enviar_mensaje_smtp(msg, destino_legible):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
     clave_app = st.secrets.get("SMTP_APP_PASSWORD", "").strip()
@@ -276,6 +306,7 @@ def enviar_mensaje_smtp(msg, destino_legible):
         return True, f"Correo enviado a {destino_legible}."
     except Exception as exc2:
         return False, f"No se pudo enviar a {destino_legible} ({exc2 or ultimo_error})."
+
 
 def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
@@ -398,6 +429,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
 
     return enviar_mensaje_smtp(msg, destino_individual)
 
+
 def enviar_correo_aviso_renominacion_original(
     destinatario_original,
     nombre_original,
@@ -487,6 +519,7 @@ def enviar_correo_aviso_renominacion_original(
 
     return enviar_mensaje_smtp(msg, destino)
 
+
 def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto):
     if archivo.name.lower().endswith(".xlsx"):
         df_raw = pd.read_excel(archivo)
@@ -562,6 +595,7 @@ def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto
     if not registros:
         return None, "No se encontraron filas válidas con nombre y RUT en el archivo."
     return {"registros": registros, "advertencias": advertencias}, None
+
 
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
@@ -738,16 +772,114 @@ if "borrador_masivo" not in st.session_state:
 if "ren_reset_id" not in st.session_state:
     st.session_state.ren_reset_id = 0
 
-def reparar_filas_desplazadas(conn):
-    c = conn.cursor()
-    c.execute("SELECT rowid, codigo, correo, creado_por, evento, caducidad FROM entradas")
-    filas = c.fetchall()
+
+# ==========================================
+# ☁️ BASE DE DATOS EN GOOGLE SHEETS
+# ==========================================
+@st.cache_resource
+def conectar_spreadsheet():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open_by_key(str(st.secrets["SHEET_ID"]).strip())
+
+
+def obtener_hoja(nombre_pestana, headers):
+    sh = conectar_spreadsheet()
+    try:
+        ws = sh.worksheet(nombre_pestana)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=nombre_pestana, rows=1000, cols=max(len(headers), 12))
+    fila1 = ws.row_values(1)
+    if not fila1:
+        ws.update(range_name="A1", values=[headers])
+    elif fila1 != headers:
+        todos = ws.get_all_values()
+        if len(todos) <= 1:
+            ws.clear()
+            ws.update(range_name="A1", values=[headers])
+        else:
+            df_tmp = pd.DataFrame(todos[1:], columns=todos[0])
+            for h in headers:
+                if h not in df_tmp.columns:
+                    df_tmp[h] = ""
+            df_tmp = df_tmp[headers].fillna("")
+            ws.clear()
+            ws.update(range_name="A1", values=[headers] + df_tmp.astype(str).values.tolist())
+    return ws
+
+
+@st.cache_data(ttl=10)
+def cargar_entradas_sheet():
+    ws = obtener_hoja("entradas", ENTRADAS_COLS)
+    valores = ws.get_all_values()
+    if len(valores) <= 1:
+        return pd.DataFrame(columns=ENTRADAS_COLS)
+    encabezados = valores[0]
+    filas = []
+    for r in valores[1:]:
+        if not any(str(x).strip() for x in r):
+            continue
+        padded = list(r) + [""] * max(0, len(encabezados) - len(r))
+        filas.append(padded[: len(encabezados)])
+    df = pd.DataFrame(filas, columns=encabezados)
+    for col in ENTRADAS_COLS:
+        if col not in df.columns:
+            df[col] = ""
+    return df[ENTRADAS_COLS].fillna("")
+
+
+@st.cache_data(ttl=10)
+def cargar_eventos_sheet():
+    ws = obtener_hoja("eventos", EVENTOS_COLS)
+    valores = ws.get_all_values()
+    eventos = {}
+    for r in valores[1:]:
+        if len(r) >= 1 and str(r[0]).strip():
+            nom = str(r[0]).strip()
+            cad = str(r[1]).strip() if len(r) >= 2 else ""
+            eventos[nom] = cad
+    return dict(sorted(eventos.items(), key=lambda x: x[0].lower()))
+
+
+def limpiar_cache_sheets():
+    cargar_entradas_sheet.clear()
+    cargar_eventos_sheet.clear()
+
+
+def escribir_entradas_completo(df_entradas):
+    ws = obtener_hoja("entradas", ENTRADAS_COLS)
+    df_out = df_entradas.copy()
+    for col in ENTRADAS_COLS:
+        if col not in df_out.columns:
+            df_out[col] = ""
+    df_out = df_out[ENTRADAS_COLS].fillna("").astype(str)
+    ws.clear()
+    ws.update(range_name="A1", values=[ENTRADAS_COLS] + df_out.values.tolist())
+    limpiar_cache_sheets()
+
+
+def escribir_eventos_completo(eventos_dict):
+    ws = obtener_hoja("eventos", EVENTOS_COLS)
+    filas = [[str(k).strip(), str(v).strip()] for k, v in sorted(eventos_dict.items(), key=lambda x: x[0].lower()) if str(k).strip()]
+    ws.clear()
+    ws.update(range_name="A1", values=[EVENTOS_COLS] + filas)
+    limpiar_cache_sheets()
+
+
+def reparar_filas_desplazadas(df_in):
+    df_work = df_in.copy()
     cambios = 0
-    for rowid, codigo, correo, creado_por, evento, caducidad in filas:
-        cor_s = str(correo or "").strip()
-        prod_s = str(creado_por or "").strip()
-        ev_s = str(evento or "").strip()
-        cad_s = str(caducidad or "").strip()
+    for idx, row in df_work.iterrows():
+        cor_s = str(row.get("correo", "") or "").strip()
+        prod_s = str(row.get("creado_por", "") or "").strip()
+        ev_s = str(row.get("evento", "") or "").strip()
+        cad_s = str(row.get("caducidad", "") or "").strip()
 
         nuevo_cor = cor_s
         nuevo_prod = prod_s
@@ -769,74 +901,88 @@ def reparar_filas_desplazadas(conn):
                 nuevo_ev = ""
 
         if (nuevo_cor, nuevo_prod, nuevo_ev, nuevo_cad) != (cor_s, prod_s, ev_s, cad_s):
-            c.execute(
-                "UPDATE entradas SET correo = ?, creado_por = ?, evento = ?, caducidad = ? WHERE rowid = ?",
-                (nuevo_cor, nuevo_prod, nuevo_ev, nuevo_cad, rowid)
-            )
+            df_work.at[idx, "correo"] = nuevo_cor
+            df_work.at[idx, "creado_por"] = nuevo_prod
+            df_work.at[idx, "evento"] = nuevo_ev
+            df_work.at[idx, "caducidad"] = nuevo_cad
             cambios += 1
+
     if cambios:
-        conn.commit()
+        escribir_entradas_completo(df_work)
+    return df_work
 
-# --- BASE DE DATOS LOCAL (SQLite) ---
-def init_db():
-    conn = sqlite3.connect("entradas.db", check_same_thread=False)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS entradas (
-            codigo TEXT PRIMARY KEY,
-            nombre TEXT,
-            rut TEXT,
-            correo TEXT,
-            tipo TEXT,
-            estado TEXT,
-            fecha_creacion TEXT,
-            fecha_ingreso TEXT,
-            creado_por TEXT,
-            evento TEXT,
-            caducidad TEXT,
-            nota_renominacion TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS eventos (
-            nombre TEXT PRIMARY KEY,
-            caducidad TEXT
-        )
-    """)
-    c.execute("PRAGMA table_info(entradas)")
-    columnas = [col[1] for col in c.fetchall()]
-    if "correo" not in columnas:
-        c.execute("ALTER TABLE entradas ADD COLUMN correo TEXT DEFAULT ''")
-    if "creado_por" not in columnas:
-        c.execute("ALTER TABLE entradas ADD COLUMN creado_por TEXT DEFAULT ''")
-    if "evento" not in columnas:
-        c.execute("ALTER TABLE entradas ADD COLUMN evento TEXT DEFAULT ''")
-    if "caducidad" not in columnas:
-        c.execute("ALTER TABLE entradas ADD COLUMN caducidad TEXT DEFAULT ''")
-    if "nota_renominacion" not in columnas:
-        c.execute("ALTER TABLE entradas ADD COLUMN nota_renominacion TEXT DEFAULT ''")
-    conn.commit()
-    reparar_filas_desplazadas(conn)
-    return conn
-
-conn = init_db()
 
 def obtener_eventos():
-    c = conn.cursor()
-    c.execute("SELECT nombre, caducidad FROM eventos ORDER BY nombre ASC")
-    return dict(c.fetchall())
+    return dict(cargar_eventos_sheet())
 
-def siguiente_codigo_ren(conn):
-    c = conn.cursor()
-    c.execute("SELECT nota_renominacion FROM entradas WHERE nota_renominacion LIKE '%REN-%'")
+
+def guardar_evento(nombre_ev, caducidad_str, solo_si_no_existe=False):
+    nom = str(nombre_ev).strip()
+    if not nom:
+        return
+    eventos = obtener_eventos()
+    if solo_si_no_existe and nom in eventos:
+        return
+    eventos[nom] = str(caducidad_str).strip()
+    escribir_eventos_completo(eventos)
+
+
+def agregar_entrada(fila_valores):
+    ws = obtener_hoja("entradas", ENTRADAS_COLS)
+    ws.append_row([str(v or "") for v in fila_valores], value_input_option="USER_ENTERED")
+    limpiar_cache_sheets()
+
+
+def agregar_entradas_lote(lista_filas):
+    if not lista_filas:
+        return
+    ws = obtener_hoja("entradas", ENTRADAS_COLS)
+    ws.append_rows([[str(v or "") for v in fila] for fila in lista_filas], value_input_option="USER_ENTERED")
+    limpiar_cache_sheets()
+
+
+def actualizar_entrada_por_codigo(codigo_obj, cambios_dict):
+    ws = obtener_hoja("entradas", ENTRADAS_COLS)
+    celda = ws.find(str(codigo_obj).strip(), in_column=1)
+    if celda is None:
+        return False
+    fila_actual = ws.row_values(celda.row)
+    fila_actual = list(fila_actual) + [""] * max(0, len(ENTRADAS_COLS) - len(fila_actual))
+    fila_actual = fila_actual[: len(ENTRADAS_COLS)]
+    for campo, val in cambios_dict.items():
+        if campo in ENTRADAS_COLS:
+            fila_actual[ENTRADAS_COLS.index(campo)] = str(val if val is not None else "")
+    ws.update(range_name=f"A{celda.row}:L{celda.row}", values=[fila_actual])
+    limpiar_cache_sheets()
+    return True
+
+
+def upsert_entradas_desde_df(df_nuevo):
+    df_actual = cargar_entradas_sheet().copy()
+    mapa = {}
+    for _, r in df_actual.iterrows():
+        c_key = str(r["codigo"]).strip()
+        if c_key:
+            mapa[c_key] = [str(r[col] or "") for col in ENTRADAS_COLS]
+    for _, r in df_nuevo.iterrows():
+        c_key = str(r["codigo"]).strip()
+        if c_key:
+            mapa[c_key] = [str(r[col] or "") for col in ENTRADAS_COLS]
+    df_final = pd.DataFrame(list(mapa.values()), columns=ENTRADAS_COLS) if mapa else pd.DataFrame(columns=ENTRADAS_COLS)
+    escribir_entradas_completo(df_final)
+
+
+def siguiente_codigo_ren(df_entradas):
     max_num = 0
-    for (nota,) in c.fetchall():
-        if nota:
-            for match in re.findall(r"REN-(\d+)", str(nota)):
-                val = int(match)
-                if val > max_num:
-                    max_num = val
+    if "nota_renominacion" in df_entradas.columns:
+        for nota in df_entradas["nota_renominacion"].dropna():
+            if nota:
+                for match in re.findall(r"REN-(\d+)", str(nota)):
+                    val = int(match)
+                    if val > max_num:
+                        max_num = val
     return f"REN-{max_num + 1:03d}"
+
 
 def fecha_caducidad_pasada(caducidad_str, eventos_dict, evento_nombre):
     referencia = (caducidad_str or "").strip() or eventos_dict.get(evento_nombre, "").strip()
@@ -851,6 +997,17 @@ def fecha_caducidad_pasada(caducidad_str, eventos_dict, evento_nombre):
         except ValueError:
             continue
     return False, referencia
+
+
+# Inicializar conexión con Google Sheets
+try:
+    obtener_hoja("entradas", ENTRADAS_COLS)
+    obtener_hoja("eventos", EVENTOS_COLS)
+except Exception as e:
+    st.error("No se pudo conectar con Google Sheets. Verifica Secrets y que la hoja esté compartida como Editor.")
+    st.exception(e)
+    st.stop()
+
 
 # ==========================================
 # 🚪 PORTADA DE INICIO DE SESIÓN SEPARADA
@@ -969,17 +1126,23 @@ if st.session_state.rol_sesion == "puerta":
         codigo_leido = st.text_input("Ingresa o escanea el código:").strip()
 
     if codigo_leido:
-        c = conn.cursor()
-        c.execute(
-            "SELECT codigo, nombre, rut, correo, tipo, estado, fecha_ingreso, creado_por, evento, caducidad FROM entradas WHERE codigo = ?",
-            (codigo_leido,)
-        )
-        entrada = c.fetchone()
+        df_puerta = cargar_entradas_sheet()
+        coinc = df_puerta[df_puerta["codigo"].astype(str).str.strip() == codigo_leido]
 
-        if not entrada:
+        if coinc.empty:
             st.error(f"❌ ACCESO DENEGADO: El código `{codigo_leido}` no existe.")
         else:
-            cod, nombre, rut, correo, tipo, estado, fecha_ing, creado_por, ev_qr, cad_qr = entrada
+            reg = coinc.iloc[0]
+            cod = str(reg["codigo"]).strip()
+            nombre = str(reg["nombre"]).strip()
+            rut = str(reg["rut"]).strip()
+            correo = str(reg["correo"]).strip()
+            tipo = str(reg["tipo"]).strip()
+            estado = str(reg["estado"]).strip()
+            fecha_ing = str(reg["fecha_ingreso"]).strip()
+            creado_por = str(reg["creado_por"]).strip()
+            ev_qr = str(reg["evento"]).strip()
+            cad_qr = str(reg["caducidad"]).strip()
 
             caducada = False
             if cad_qr:
@@ -1014,8 +1177,7 @@ if st.session_state.rol_sesion == "puerta":
 
                 if st.button("✅ CONFIRMAR INGRESO (QUEMAR QR)", type="primary", use_container_width=True):
                     ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
-                    c.execute("UPDATE entradas SET estado = 'USADA', fecha_ingreso = ? WHERE codigo = ?", (ahora_str, cod))
-                    conn.commit()
+                    actualizar_entrada_por_codigo(cod, {"estado": "USADA", "fecha_ingreso": ahora_str})
                     st.toast(f"Ingreso confirmado: {nombre}")
                     st.rerun()
 
@@ -1052,7 +1214,8 @@ elif st.session_state.rol_sesion == "admin":
     st.divider()
 
     if st.session_state.vista_admin == "generar":
-        with st.expander("➕ CREAR O EDITAR EVENTO (QUEDA GUARDADO)", expanded=(len(obtener_eventos()) == 0)):
+        eventos_guardados = obtener_eventos()
+        with st.expander("➕ CREAR O EDITAR EVENTO (QUEDA GUARDADO)", expanded=(len(eventos_guardados) == 0)):
             with st.form("form_nuevo_evento", clear_on_submit=True):
                 col_ev, col_fec, col_hor = st.columns([2, 1.2, 1])
                 with col_ev:
@@ -1066,9 +1229,7 @@ elif st.session_state.rol_sesion == "admin":
                 if guardar_ev:
                     if nuevo_ev.strip():
                         cad_str = f"{fec_ev.strftime('%Y-%m-%d')} {hor_ev.strftime('%H:%M')}"
-                        c = conn.cursor()
-                        c.execute("INSERT OR REPLACE INTO eventos VALUES (?, ?)", (nuevo_ev.strip(), cad_str))
-                        conn.commit()
+                        guardar_evento(nuevo_ev.strip(), cad_str, solo_si_no_existe=False)
                         st.success(f"Evento **{nuevo_ev.strip()}** guardado (caduca: {cad_str}).")
                         st.rerun()
                     else:
@@ -1143,12 +1304,10 @@ elif st.session_state.rol_sesion == "admin":
                         codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                         ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                         creador = st.session_state.usuario_actual
-                        c = conn.cursor()
-                        c.execute(
-                            "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], "DISPONIBLE", ahora_str, "", creador, b["evento"], b["caducidad"], "")
-                        )
-                        conn.commit()
+                        agregar_entrada([
+                            codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"],
+                            "DISPONIBLE", ahora_str, "", creador, b["evento"], b["caducidad"], ""
+                        ])
                         ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"])
                         st.session_state["ultimo_qr"] = (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], creador, b["evento"], b["caducidad"])
                         st.session_state.borrador_qr = None
@@ -1213,7 +1372,6 @@ elif st.session_state.rol_sesion == "admin":
                 col_m_ok, col_m_no = st.columns(2)
                 with col_m_ok:
                     if st.button("🚀 SÍ, GENERAR Y ENVIAR TODOS", type="primary", use_container_width=True):
-                        c = conn.cursor()
                         creador = st.session_state.usuario_actual
                         ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                         enviados_ok = 0
@@ -1221,6 +1379,10 @@ elif st.session_state.rol_sesion == "admin":
                         errores_detalle = []
                         barra = st.progress(0)
                         estado_txt = st.empty()
+
+                        eventos_lote = obtener_eventos()
+                        eventos_modificados = False
+                        filas_nuevas = []
 
                         for i, reg in enumerate(bm["registros"]):
                             nom_fila = str(reg["nombre"]).strip()
@@ -1232,12 +1394,15 @@ elif st.session_state.rol_sesion == "admin":
 
                             estado_txt.text(f"Procesando {i + 1}/{total_regs}: {nom_fila} -> {cor_fila or 'sin correo'}...")
                             codigo_fila = f"KLM-{uuid.uuid4().hex[:8].upper()}"
-                            if ev_fila:
-                                c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (ev_fila, cad_fila))
-                            c.execute(
-                                "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (codigo_fila, nom_fila, rut_fila, cor_fila, tp_fila, "DISPONIBLE", ahora_str, "", creador, ev_fila, cad_fila, "")
-                            )
+                            if ev_fila and ev_fila not in eventos_lote:
+                                eventos_lote[ev_fila] = cad_fila
+                                eventos_modificados = True
+
+                            filas_nuevas.append([
+                                codigo_fila, nom_fila, rut_fila, cor_fila, tp_fila,
+                                "DISPONIBLE", ahora_str, "", creador, ev_fila, cad_fila, ""
+                            ])
+
                             if cor_fila:
                                 qr_fila_bytes = generar_tarjeta_qr_bytes(codigo_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila)
                                 ok_m, detalle_m = enviar_qr_por_correo(
@@ -1251,7 +1416,10 @@ elif st.session_state.rol_sesion == "admin":
                                 pytime.sleep(0.25)
                             barra.progress((i + 1) / total_regs)
 
-                        conn.commit()
+                        if eventos_modificados:
+                            escribir_eventos_completo(eventos_lote)
+                        agregar_entradas_lote(filas_nuevas)
+
                         st.session_state.borrador_masivo = None
                         estado_txt.empty()
                         st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos individuales enviados | {enviados_err} con error.")
@@ -1289,10 +1457,11 @@ elif st.session_state.rol_sesion == "admin":
             for av_m in st.session_state.pop("ren_msg_avisos"):
                 st.warning(av_m)
 
-        reparar_filas_desplazadas(conn)
+        df_ren_raw = reparar_filas_desplazadas(cargar_entradas_sheet())
         eventos_dict_ren = obtener_eventos()
-        df_ren_raw = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
         df_ren = normalizar_dataframe_por_encabezado(df_ren_raw)
+        if not df_ren.empty:
+            df_ren = df_ren.sort_values(by="fecha_creacion", ascending=False).reset_index(drop=True)
 
         if df_ren.empty:
             st.info("No hay entradas registradas aún para renombrar.")
@@ -1410,7 +1579,7 @@ elif st.session_state.rol_sesion == "admin":
                             rut_nue_val = nuevo_rut.strip()
                             correo_nue_val = nuevo_correo.strip()
 
-                            codigo_ren = siguiente_codigo_ren(conn)
+                            codigo_ren = siguiente_codigo_ren(df_ren)
                             fecha_ren = ahora_chile().strftime("%d/%m/%Y %H:%M")
                             anterior_txt = (
                                 f"ANTERIOR [{codigo_ren}]: {nombre_ant_val} | RUT: {rut_ant_val} | "
@@ -1431,12 +1600,16 @@ elif st.session_state.rol_sesion == "admin":
                                 if fila_actual["nota_renominacion"]
                                 else marca_cambio
                             )
-                            c = conn.cursor()
-                            c.execute(
-                                "UPDATE entradas SET nombre = ?, rut = ?, correo = ?, tipo = ?, nota_renominacion = ? WHERE codigo = ?",
-                                (nombre_nue_val, rut_nue_val, correo_nue_val, nuevo_tipo, nota_acumulada, codigo_sel)
+                            actualizar_entrada_por_codigo(
+                                codigo_sel,
+                                {
+                                    "nombre": nombre_nue_val,
+                                    "rut": rut_nue_val,
+                                    "correo": correo_nue_val,
+                                    "tipo": nuevo_tipo,
+                                    "nota_renominacion": nota_acumulada,
+                                }
                             )
-                            conn.commit()
 
                             avisos_envio = []
                             if correo_ant_val and correo_valido(correo_ant_val):
@@ -1501,9 +1674,10 @@ elif st.session_state.rol_sesion == "admin":
                             st.rerun()
 
     elif st.session_state.vista_admin == "lista":
-        reparar_filas_desplazadas(conn)
-        df_raw = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
+        df_raw = reparar_filas_desplazadas(cargar_entradas_sheet())
         df = normalizar_dataframe_por_encabezado(df_raw)
+        if not df.empty:
+            df = df.sort_values(by="fecha_creacion", ascending=False).reset_index(drop=True)
 
         col_f1, col_f2 = st.columns([1.2, 1.8])
         with col_f1:
@@ -1556,21 +1730,21 @@ elif st.session_state.rol_sesion == "admin":
                 else:
                     df_nuevo_raw = pd.read_csv(archivo_subido)
                 df_nuevo = normalizar_dataframe_por_encabezado(df_nuevo_raw)
-                c = conn.cursor()
+                upsert_entradas_desde_df(df_nuevo)
+
+                eventos_act = obtener_eventos()
+                eventos_camb = False
                 for _, row in df_nuevo.iterrows():
-                    c.execute(
-                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            row["codigo"], row["nombre"], row["rut"], row["correo"],
-                            row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"],
-                            row["creado_por"], row["evento"], row["caducidad"], row["nota_renominacion"]
-                        )
-                    )
-                    if row["evento"]:
-                        c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (row["evento"], row["caducidad"]))
-                conn.commit()
-                reparar_filas_desplazadas(conn)
-                st.success("Base de datos restaurada correctamente.")
+                    ev_r = str(row["evento"]).strip()
+                    cad_r = str(row["caducidad"]).strip()
+                    if ev_r and ev_r not in eventos_act:
+                        eventos_act[ev_r] = cad_r
+                        eventos_camb = True
+                if eventos_camb:
+                    escribir_eventos_completo(eventos_act)
+
+                reparar_filas_desplazadas(cargar_entradas_sheet())
+                st.success("Base de datos restaurada correctamente en Google Sheets.")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1588,11 +1762,13 @@ elif st.session_state.rol_sesion == "admin":
                     if not confirmar_ev:
                         st.warning("Marca la casilla de confirmación antes de eliminar el evento.")
                     else:
-                        c = conn.cursor()
-                        c.execute("DELETE FROM eventos WHERE nombre = ?", (ev_borrar,))
+                        ev_dict = obtener_eventos()
+                        ev_dict.pop(ev_borrar, None)
+                        escribir_eventos_completo(ev_dict)
                         if borrar_entradas_ev:
-                            c.execute("DELETE FROM entradas WHERE evento = ?", (ev_borrar,))
-                        conn.commit()
+                            df_act = cargar_entradas_sheet()
+                            df_act = df_act[df_act["evento"].astype(str).str.strip() != str(ev_borrar).strip()]
+                            escribir_entradas_completo(df_act)
                         st.success(f"Evento **{ev_borrar}** eliminado.")
                         st.rerun()
             else:
@@ -1612,9 +1788,9 @@ elif st.session_state.rol_sesion == "admin":
                         st.warning("Marca la casilla de confirmación antes de borrar la entrada.")
                     else:
                         cod_borrar = sel_detalle.split(" — ", 1)[0].strip()
-                        c = conn.cursor()
-                        c.execute("DELETE FROM entradas WHERE codigo = ?", (cod_borrar,))
-                        conn.commit()
+                        df_act = cargar_entradas_sheet()
+                        df_act = df_act[df_act["codigo"].astype(str).str.strip() != cod_borrar]
+                        escribir_entradas_completo(df_act)
                         st.success(f"Entrada `{cod_borrar}` eliminada.")
                         st.rerun()
 
@@ -1625,8 +1801,6 @@ elif st.session_state.rol_sesion == "admin":
                 if not confirmar_todo:
                     st.warning("Marca la casilla de confirmación para vaciar la tabla de entradas.")
                 else:
-                    c = conn.cursor()
-                    c.execute("DELETE FROM entradas")
-                    conn.commit()
+                    escribir_entradas_completo(pd.DataFrame(columns=ENTRADAS_COLS))
                     st.success("Todas las entradas han sido eliminadas.")
                     st.rerun()

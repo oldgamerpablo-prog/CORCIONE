@@ -3,6 +3,7 @@ import sqlite3
 import uuid
 import os
 import re
+import time as pytime
 import smtplib
 from email.message import EmailMessage
 import pandas as pd
@@ -23,11 +24,11 @@ def ahora_chile():
         return datetime.now()
 
 def limpiar_nombre_archivo(texto):
-    limpio = re.sub(r"[^A-Za-z0-9_-]+", "_", texto.strip())
+    limpio = re.sub(r"[^A-Za-z0-9_-]+", "_", str(texto).strip())
     return limpio.strip("_") or "evento"
 
 def correo_valido(correo):
-    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", correo.strip()))
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", str(correo).strip()))
 
 def generar_excel_bytes(df_data):
     buf = BytesIO()
@@ -87,8 +88,8 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
         draw.text((ancho // 2, 54), "COLECTIVO KALMA", fill="#ffffff", font=f_titulo, anchor="mm")
         draw.text((ancho // 2, 88), "ELECTRONIC MUSIC // OFFICIAL E-TICKET", fill="#22d3ee", font=f_sub, anchor="mm")
 
-    draw.text((ancho // 2, 152), evento.upper(), fill="#22d3ee", font=f_evento, anchor="mm")
-    draw.text((ancho // 2, 182), f"PASE: {tipo.upper()}", fill="#d8b4fe", font=f_sub, anchor="mm")
+    draw.text((ancho // 2, 152), str(evento).upper(), fill="#22d3ee", font=f_evento, anchor="mm")
+    draw.text((ancho // 2, 182), f"PASE: {str(tipo).upper()}", fill="#d8b4fe", font=f_sub, anchor="mm")
 
     qr_box_x0 = (ancho - (qr_size + 28)) // 2
     qr_box_y0 = 205
@@ -235,6 +236,52 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         return True, f"E-Ticket enviado automáticamente a {destinatario}."
     except Exception as exc2:
         return False, f"No se pudo enviar el correo ({exc2 or ultimo_error})."
+
+def normalizar_excel_masivo(archivo):
+    if archivo.name.lower().endswith(".xlsx"):
+        df_raw = pd.read_excel(archivo).fillna("")
+    else:
+        df_raw = pd.read_csv(archivo).fillna("")
+
+    mapa_cols = {}
+    for col in df_raw.columns:
+        clave = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip("_")
+        if clave in {"nombre", "nombre_completo", "asistente", "name"}:
+            mapa_cols[col] = "nombre"
+        elif clave in {"rut", "carnet", "dni", "run"}:
+            mapa_cols[col] = "rut"
+        elif clave in {"correo", "email", "e_mail", "mail", "correo_electronico"}:
+            mapa_cols[col] = "correo"
+        elif clave in {"tipo", "tipo_de_pase", "tipo_pase", "pase", "entrada", "ticket"}:
+            mapa_cols[col] = "tipo"
+
+    df_norm = df_raw.rename(columns=mapa_cols)
+    for req in ["nombre", "rut", "correo"]:
+        if req not in df_norm.columns:
+            return None, f"Falta la columna obligatoria `{req}` en el archivo."
+    if "tipo" not in df_norm.columns:
+        df_norm["tipo"] = "General"
+
+    registros = []
+    advertencias = []
+    for idx, row in df_norm.iterrows():
+        nom = str(row["nombre"]).strip()
+        rt = str(row["rut"]).strip()
+        cor = str(row["correo"]).strip()
+        tp = str(row["tipo"]).strip() or "General"
+        if not nom and not rt and not cor:
+            continue
+        if not nom or not rt:
+            advertencias.append(f"Fila {idx + 2}: omitida por faltar nombre o RUT.")
+            continue
+        if cor and not correo_valido(cor):
+            advertencias.append(f"Fila {idx + 2} ({nom}): correo `{cor}` con formato inválido (no se enviará correo).")
+            cor = ""
+        registros.append({"nombre": nom, "rut": rt, "correo": cor, "tipo": tp})
+
+    if not registros:
+        return None, "No se encontraron filas válidas con nombre y RUT en el archivo."
+    return {"registros": registros, "advertencias": advertencias}, None
 
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
@@ -423,6 +470,8 @@ if "admin_usuario" not in st.session_state:
     st.session_state.admin_usuario = None
 if "borrador_qr" not in st.session_state:
     st.session_state.borrador_qr = None
+if "borrador_masivo" not in st.session_state:
+    st.session_state.borrador_masivo = None
 
 # ==========================================
 # 🚪 PORTADA DE INICIO DE SESIÓN CON LOGO
@@ -527,6 +576,7 @@ with col_salir:
         st.session_state.usuario_actual = ""
         st.session_state.admin_usuario = None
         st.session_state.borrador_qr = None
+        st.session_state.borrador_masivo = None
         st.rerun()
 
 st.caption(f"🟢 EN LÍNEA: **{st.session_state.usuario_actual}** | 🕒 Hora Chile: {ahora_chile().strftime('%d/%m/%Y %H:%M')}")
@@ -659,6 +709,7 @@ with tab2:
                 fecha_qr = st.date_input("Fecha caducidad QR", value=def_fecha, key=f"fec_{evento_elegido}")
             with col_sel_hor:
                 hora_qr = st.time_input("Hora límite QR", value=def_hora, key=f"hor_{evento_elegido}")
+            caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
 
             with st.form("form_crear"):
                 nombre = st.text_input("Nombre Completo")
@@ -673,7 +724,6 @@ with tab2:
                 elif correo.strip() and not correo_valido(correo.strip()):
                     st.error(f"El correo `{correo.strip()}` no tiene un formato válido. Revísalo antes de continuar.")
                 else:
-                    caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
                     st.session_state.borrador_qr = {
                         "nombre": nombre.strip(),
                         "rut": rut.strip(),
@@ -730,6 +780,75 @@ with tab2:
                     if st.button("✏️ CORREGIR DATOS", use_container_width=True):
                         st.session_state.borrador_qr = None
                         st.rerun()
+
+            # --- CARGA MASIVA DESDE EXCEL ---
+            st.divider()
+            with st.expander("📦 CARGA MASIVA DE QR DESDE EXCEL (NOMBRE, RUT, CORREO, TIPO)"):
+                st.caption("Columnas esperadas: `nombre`, `rut`, `correo`, `tipo` (se aplicarán al evento y caducidad seleccionados arriba).")
+                archivo_masivo = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV", type=["xlsx", "csv"], key="uploader_masivo")
+
+                if archivo_masivo is not None:
+                    if st.button("📋 REVISAR LISTADO ANTES DE ENVIAR", type="primary", use_container_width=True):
+                        resultado, err_masivo = normalizar_excel_masivo(archivo_masivo)
+                        if err_masivo:
+                            st.error(err_masivo)
+                        else:
+                            st.session_state.borrador_masivo = {
+                                "evento": evento_elegido,
+                                "caducidad": caducidad_final,
+                                "registros": resultado["registros"],
+                                "advertencias": resultado["advertencias"],
+                            }
+                            st.rerun()
+
+                if st.session_state.borrador_masivo is not None:
+                    bm = st.session_state.borrador_masivo
+                    total_regs = len(bm["registros"])
+                    con_correo = sum(1 for r in bm["registros"] if r["correo"])
+                    st.warning(f"❓ **¿Estás seguro de generar y enviar {total_regs} E-Tickets?** ({con_correo} con correo para envío automático al evento **{bm['evento']}**, caducidad **{bm['caducidad']}**).")
+                    st.dataframe(pd.DataFrame(bm["registros"]), use_container_width=True, hide_index=True)
+
+                    for adv in bm["advertencias"]:
+                        st.caption(f"⚠️ {adv}")
+
+                    col_m_ok, col_m_no = st.columns(2)
+                    with col_m_ok:
+                        if st.button("🚀 SÍ, GENERAR Y ENVIAR TODOS", type="primary", use_container_width=True):
+                            c = conn.cursor()
+                            creador = st.session_state.admin_usuario
+                            ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
+                            enviados_ok = 0
+                            enviados_err = 0
+                            barra = st.progress(0)
+                            estado_txt = st.empty()
+
+                            for i, reg in enumerate(bm["registros"]):
+                                estado_txt.text(f"Procesando {i + 1}/{total_regs}: {reg['nombre']}...")
+                                codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
+                                c.execute(
+                                    "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                    (codigo_unico, reg["nombre"], reg["rut"], reg["correo"], reg["tipo"], "DISPONIBLE", ahora_str, "", creador, bm["evento"], bm["caducidad"])
+                                )
+                                if reg["correo"]:
+                                    ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, reg["nombre"], reg["rut"], reg["tipo"], bm["evento"], bm["caducidad"])
+                                    ok_m, _ = enviar_qr_por_correo(
+                                        reg["correo"], reg["nombre"], reg["rut"], reg["tipo"], bm["evento"], bm["caducidad"], codigo_unico, ticket_bytes
+                                    )
+                                    if ok_m:
+                                        enviados_ok += 1
+                                    else:
+                                        enviados_err += 1
+                                    pytime.sleep(0.25)
+                                barra.progress((i + 1) / total_regs)
+
+                            conn.commit()
+                            st.session_state.borrador_masivo = None
+                            estado_txt.empty()
+                            st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos enviados | {enviados_err} con error de envío.")
+                    with col_m_no:
+                        if st.button("❌ CANCELAR LOTE", use_container_width=True):
+                            st.session_state.borrador_masivo = None
+                            st.rerun()
 
         ultimo = st.session_state.get("ultimo_qr")
         if isinstance(ultimo, (list, tuple)) and len(ultimo) == 8:

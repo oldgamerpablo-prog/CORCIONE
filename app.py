@@ -8,7 +8,7 @@ from email.message import EmailMessage
 import pandas as pd
 import qrcode
 import zxingcpp
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -35,32 +35,192 @@ def generar_excel_bytes(df_data):
         df_data.to_excel(writer, index=False, sheet_name="Entradas")
     return buf.getvalue()
 
-def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, qr_bytes):
+def cargar_fuente(tamano, bold=False):
+    candidatos = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    ]
+    for ruta in candidatos:
+        if os.path.exists(ruta):
+            try:
+                return ImageFont.truetype(ruta, tamano)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
+    # QR base
+    qr = qrcode.QRCode(version=1, box_size=8, border=2)
+    qr.add_data(codigo)
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="#09090b", back_color="#ffffff").convert("RGB")
+    qr_size = 260
+    qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.NEAREST)
+
+    # Lienzo tipo E-Ticket oscuro
+    ancho, alto = 560, 760
+    tarjeta = Image.new("RGB", (ancho, alto), "#0d0a14")
+    draw = ImageDraw.Draw(tarjeta)
+
+    # Marco exterior neón
+    draw.rounded_rectangle([14, 14, ancho - 14, alto - 14], radius=24, outline="#9333ea", width=3)
+    draw.rounded_rectangle([22, 22, ancho - 22, 120], radius=18, fill="#1b102b", outline="#22d3ee", width=2)
+
+    f_titulo = cargar_fuente(28, bold=True)
+    f_sub = cargar_fuente(13, bold=True)
+    f_evento = cargar_fuente(20, bold=True)
+    f_dato = cargar_fuente(15, bold=False)
+    f_dato_bold = cargar_fuente(15, bold=True)
+    f_cod = cargar_fuente(14, bold=True)
+
+    logo_colocado = False
+    if os.path.exists("logo.png"):
+        try:
+            logo_img = Image.open("logo.png").convert("RGBA")
+            max_w, max_h = 340, 76
+            logo_img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+            lx = (ancho - logo_img.width) // 2
+            ly = 22 + (98 - logo_img.height) // 2
+            tarjeta.paste(logo_img, (lx, ly), logo_img)
+            logo_colocado = True
+        except Exception:
+            logo_colocado = False
+
+    if not logo_colocado:
+        draw.text((ancho // 2, 54), "COLECTIVO KALMA", fill="#ffffff", font=f_titulo, anchor="mm")
+        draw.text((ancho // 2, 88), "ELECTRONIC MUSIC // OFFICIAL E-TICKET", fill="#22d3ee", font=f_sub, anchor="mm")
+
+    # Nombre del evento y pase
+    draw.text((ancho // 2, 152), evento.upper(), fill="#22d3ee", font=f_evento, anchor="mm")
+    draw.text((ancho // 2, 182), f"PASE: {tipo.upper()}", fill="#d8b4fe", font=f_sub, anchor="mm")
+
+    # Caja blanca para el QR
+    qr_box_x0 = (ancho - (qr_size + 28)) // 2
+    qr_box_y0 = 205
+    qr_box_x1 = qr_box_x0 + qr_size + 28
+    qr_box_y1 = qr_box_y0 + qr_size + 28
+    draw.rounded_rectangle([qr_box_x0, qr_box_y0, qr_box_x1, qr_box_y1], radius=18, fill="#ffffff", outline="#22d3ee", width=3)
+    tarjeta.paste(qr_img, (qr_box_x0 + 14, qr_box_y0 + 14))
+
+    draw.text((ancho // 2, qr_box_y1 + 24), f"ID: {codigo}", fill="#22d3ee", font=f_cod, anchor="mm")
+
+    # Datos del asistente
+    info_y = qr_box_y1 + 54
+    draw.rounded_rectangle([42, info_y, ancho - 42, alto - 42], radius=16, fill="#14121d", outline="#3f3f46", width=1)
+
+    lineas = [
+        ("ASISTENTE:", nombre),
+        ("RUT:", rut),
+        ("VÁLIDO HASTA:", caducidad or "Sin límite"),
+    ]
+    y_actual = info_y + 22
+    for etiqueta, valor in lineas:
+        draw.text((64, y_actual), etiqueta, fill="#a1a1aa", font=f_dato_bold)
+        draw.text((205, y_actual), str(valor)[:32], fill="#ffffff", font=f_dato)
+        y_actual += 34
+
+    draw.text((ancho // 2, alto - 62), "Presenta este E-Ticket y tu carnet en puerta", fill="#22d3ee", font=f_sub, anchor="mm")
+
+    buf = BytesIO()
+    tarjeta.save(buf, format="PNG")
+    return buf.getvalue()
+
+def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
     clave_app = st.secrets.get("SMTP_APP_PASSWORD", "").strip()
     if not remitente or not clave_app:
         return False, "Falta configurar SMTP_EMAIL y SMTP_APP_PASSWORD en Streamlit Secrets."
 
     msg = EmailMessage()
-    msg["Subject"] = f"Tu entrada QR - {evento} ({codigo})"
+    msg["Subject"] = f"¡Bienvenido a {evento}! Tu E-Ticket QR — Colectivo Kalma"
     msg["From"] = remitente
     msg["To"] = destinatario
-    msg.set_content(
-        f"Hola {nombre},\n\n"
-        f"Aquí tienes tu código QR de acceso para {evento}.\n\n"
+
+    texto_plano = (
+        f"¡Bienvenido/a {nombre} a Colectivo Kalma!\n\n"
+        f"Tu entrada para {evento} está lista.\n"
         f"• Nombre: {nombre}\n"
         f"• RUT: {rut}\n"
         f"• Tipo de pase: {tipo}\n"
         f"• Código: {codigo}\n"
         f"• Válido hasta: {caducidad}\n\n"
-        f"Presenta este QR y tu carnet en la puerta.\n"
-        f"Colectivo Kalma"
+        f"Presenta el E-Ticket adjunto y tu carnet en el acceso."
     )
+    msg.set_content(texto_plano)
+
+    logo_html = ""
+    logo_bytes = None
+    if os.path.exists("logo.png"):
+        try:
+            with open("logo.png", "rb") as f_logo:
+                logo_bytes = f_logo.read()
+            logo_html = '<img src="cid:logo_kalma" alt="Colectivo Kalma" style="max-width:220px; height:auto; display:block; margin:0 auto 10px auto;" />'
+        except Exception:
+            logo_bytes = None
+
+    if not logo_html:
+        logo_html = '<div style="font-size:24px; font-weight:800; letter-spacing:3px; color:#ffffff; margin-bottom:6px;">COLECTIVO KALMA</div>'
+
+    html_cuerpo = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0; padding:24px; background-color:#09090b; font-family:Arial, Helvetica, sans-serif; color:#f4f4f5;">
+      <div style="max-width:560px; margin:0 auto; background:linear-gradient(160deg,#181026 0%,#10131f 100%); border:1px solid #9333ea; border-radius:16px; overflow:hidden; box-shadow:0 0 25px rgba(147,51,234,0.25);">
+        <div style="padding:24px 24px 18px 24px; text-align:center; background-color:#130c1f; border-bottom:1px solid #2e1065;">
+          {logo_html}
+          <div style="font-size:11px; letter-spacing:3px; color:#22d3ee; text-transform:uppercase; font-weight:bold;">
+            ELECTRONIC MUSIC // OFFICIAL E-TICKET
+          </div>
+        </div>
+
+        <div style="padding:24px;">
+          <h2 style="margin:0 0 8px 0; font-size:22px; color:#ffffff;">¡Hola, {nombre}! 👋</h2>
+          <p style="margin:0 0 18px 0; font-size:14px; line-height:1.6; color:#d4d4d8;">
+            ¡Qué alegría tenerte con nosotros! Te damos la bienvenida a <strong style="color:#22d3ee;">{evento}</strong>.
+            Aquí tienes tu pase QR oficial para ingresar al evento.
+          </p>
+
+          <div style="background-color:#0d0e16; border:1px solid #3f3f46; border-radius:12px; padding:14px 16px; margin-bottom:20px; font-size:13px; line-height:1.7;">
+            <div><strong style="color:#a855f7;">Evento:</strong> <span style="color:#ffffff;">{evento}</span></div>
+            <div><strong style="color:#a855f7;">Asistente:</strong> <span style="color:#ffffff;">{nombre}</span></div>
+            <div><strong style="color:#a855f7;">RUT:</strong> <span style="color:#ffffff;">{rut}</span></div>
+            <div><strong style="color:#a855f7;">Tipo de pase:</strong> <span style="color:#22d3ee; font-weight:bold;">{tipo}</span></div>
+            <div><strong style="color:#a855f7;">Válido hasta:</strong> <span style="color:#ffffff;">{caducidad}</span></div>
+            <div><strong style="color:#a855f7;">Código ID:</strong> <span style="color:#e4e4e7;">{codigo}</span></div>
+          </div>
+
+          <div style="text-align:center; background-color:#14121d; border:1px solid #22d3ee; border-radius:14px; padding:16px;">
+            <div style="font-size:12px; letter-spacing:2px; color:#22d3ee; font-weight:bold; margin-bottom:12px;">
+              TU PASE QR DE ACCESO
+            </div>
+            <img src="cid:qr_ticket" alt="E-Ticket QR" style="max-width:100%; width:320px; height:auto; border-radius:10px; display:block; margin:0 auto;" />
+          </div>
+
+          <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#a1a1aa; text-align:center;">
+            Recuerda llevar tu <strong style="color:#ffffff;">carnet de identidad</strong> y tener el brillo de tu pantalla alto al llegar a la puerta.
+            Este código es personal e intransferible y caduca automáticamente en la fecha y hora indicadas.
+          </p>
+        </div>
+
+        <div style="padding:14px 24px; background-color:#0b0b10; border-top:1px solid #27272a; text-align:center; font-size:11px; color:#71717a;">
+          Colectivo Kalma • Control de Acceso Oficial
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    msg.add_alternative(html_cuerpo, subtype="html")
+
+    # Imágenes embebidas (CID) + adjunto descargable
+    if logo_bytes:
+        msg.get_payload()[1].add_related(logo_bytes, maintype="image", subtype="png", cid="<logo_kalma>")
+
+    msg.get_payload()[1].add_related(ticket_bytes, maintype="image", subtype="png", cid="<qr_ticket>")
     msg.add_attachment(
-        qr_bytes,
+        ticket_bytes,
         maintype="image",
         subtype="png",
-        filename=f"KALMA_{limpiar_nombre_archivo(evento)}_{codigo}.png"
+        filename=f"ETICKET_KALMA_{limpiar_nombre_archivo(evento)}_{codigo}.png"
     )
 
     ultimo_error = None
@@ -68,7 +228,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"QR enviado a {destinatario}."
+        return True, f"E-Ticket de bienvenida enviado a {destinatario}."
     except Exception as exc:
         ultimo_error = exc
 
@@ -79,7 +239,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
             smtp.ehlo()
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"QR enviado a {destinatario}."
+        return True, f"E-Ticket de bienvenida enviado a {destinatario}."
     except Exception as exc2:
         return False, f"No se pudo enviar el correo ({exc2 or ultimo_error}). Revisa que el correo exista y tenga dominio válido."
 
@@ -341,15 +501,6 @@ def obtener_eventos():
     c.execute("SELECT nombre, caducidad FROM eventos ORDER BY nombre ASC")
     return dict(c.fetchall())
 
-def generar_imagen_qr(texto):
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(texto)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
 def pedir_acceso_admin(id_pestana):
     if st.session_state.admin_usuario is not None:
         return True
@@ -540,10 +691,10 @@ with tab2:
         ultimo = st.session_state.get("ultimo_qr")
         if isinstance(ultimo, (list, tuple)) and len(ultimo) == 8:
             cod, nom, rt, cor, tp, cr, ev, cad = ultimo
-            qr_bytes = generar_imagen_qr(cod)
+            ticket_bytes = generar_tarjeta_qr_bytes(cod, nom, rt, tp, ev, cad)
             st.divider()
             st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor or 'Sin correo'} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
-            st.image(qr_bytes, width=250)
+            st.image(ticket_bytes, width=320)
 
             correo_verificar = st.text_input(
                 "✉️ Verificar correo antes de enviar:",
@@ -554,14 +705,14 @@ with tab2:
             col_dl, col_mail = st.columns(2)
             with col_dl:
                 st.download_button(
-                    label="📥 DESCARGAR QR",
-                    data=qr_bytes,
-                    file_name=f"KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
+                    label="📥 DESCARGAR E-TICKET",
+                    data=ticket_bytes,
+                    file_name=f"ETICKET_KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
                     mime="image/png",
                     use_container_width=True
                 )
             with col_mail:
-                if st.button("📧 ENVIAR QR POR CORREO", type="primary", use_container_width=True):
+                if st.button("📧 ENVIAR E-TICKET POR CORREO", type="primary", use_container_width=True):
                     if not correo_verificar:
                         st.error("Debes ingresar un correo electrónico para enviar.")
                     elif not correo_valido(correo_verificar):
@@ -572,7 +723,7 @@ with tab2:
                             c.execute("UPDATE entradas SET correo = ? WHERE codigo = ?", (correo_verificar, cod))
                             conn.commit()
                             st.session_state["ultimo_qr"] = (cod, nom, rt, correo_verificar, tp, cr, ev, cad)
-                        ok, msg_correo = enviar_qr_por_correo(correo_verificar, nom, rt, tp, ev, cad, cod, qr_bytes)
+                        ok, msg_correo = enviar_qr_por_correo(correo_verificar, nom, rt, tp, ev, cad, cod, ticket_bytes)
                         if ok:
                             st.success(msg_correo)
                         else:

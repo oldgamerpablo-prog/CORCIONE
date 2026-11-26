@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import sqlite3
 import uuid
 import os
@@ -155,6 +156,38 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
     buf = BytesIO()
     tarjeta.save(buf, format="PNG")
     return buf.getvalue()
+
+def forzar_camara_trasera():
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                const targetWin = window.parent || window;
+                const md = targetWin.navigator && targetWin.navigator.mediaDevices;
+                if (!md || typeof md.getUserMedia !== "function" || md.__kalmaBackCamPatched) {
+                    return;
+                }
+                const origGetUserMedia = md.getUserMedia.bind(md);
+                md.getUserMedia = function(constraints) {
+                    if (constraints && constraints.video) {
+                        const baseVideo = typeof constraints.video === "object" ? { ...constraints.video } : {};
+                        delete baseVideo.deviceId;
+                        baseVideo.facingMode = { ideal: "environment" };
+                        const nextConstraints = { ...constraints, video: baseVideo };
+                        return origGetUserMedia(nextConstraints).catch(function() {
+                            return origGetUserMedia(constraints);
+                        });
+                    }
+                    return origGetUserMedia(constraints);
+                };
+                md.__kalmaBackCamPatched = true;
+            } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
@@ -692,18 +725,20 @@ if st.session_state.rol_sesion == "puerta":
     opciones_puerta = ["Todos los eventos"] + list(eventos_dict.keys())
     evento_activo = st.selectbox("🎧 Evento activo en puerta (filtro):", opciones_puerta)
 
-    metodo = st.radio("Modo de lectura:", ["Cámara", "Código Manual / Pistola"], horizontal=True)
+    metodo = st.radio("Modo de lectura:", ["Cámara Trasera", "Código Manual / Pistola"], horizontal=True)
     codigo_leido = None
 
-    if metodo == "Cámara":
-        img_file = st.camera_input("Escanea el QR del asistente")
+    if metodo == "Cámara Trasera":
+        forzar_camara_trasera()
+        st.caption("📷 Priorizando cámara trasera. Si el navegador muestra selector de cámara, elige la trasera.")
+        img_file = st.camera_input("Escanea el QR con la cámara trasera")
         if img_file is not None:
             img = Image.open(img_file)
             resultados = zxingcpp.read_barcodes(img)
             if resultados:
                 codigo_leido = resultados[0].text.strip()
             else:
-                st.warning("No se detectó ningún QR. Acerca la cámara o sube el brillo del celular.")
+                st.warning("No se detectó ningún QR. Acerca la cámara trasera o sube el brillo del celular.")
     else:
         codigo_leido = st.text_input("Ingresa o escanea el código:").strip()
 

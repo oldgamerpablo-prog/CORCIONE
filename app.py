@@ -262,7 +262,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         return False, "Correo de destino vacío."
 
     msg = EmailMessage()
-    msg["Subject"] = f"¡Bienvenido a {evento}! Tu E-Ticket QR — Colectivo Kalma"
+    msg["Subject"] = f"¡Bienvenido a {evento}! Tu E-Ticket QR"
     msg["From"] = remitente
     msg["To"] = destino_individual
 

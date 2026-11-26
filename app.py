@@ -11,7 +11,7 @@ import qrcode
 import zxingcpp
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-from datetime import datetime, time
+from datetime import datetime, date, time
 from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
@@ -29,6 +29,42 @@ def limpiar_nombre_archivo(texto):
 
 def correo_valido(correo):
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", str(correo).strip()))
+
+def parsear_fecha_excel(valor, fecha_defecto):
+    if valor is None or str(valor).strip() == "" or pd.isna(valor):
+        return fecha_defecto
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    texto = str(valor).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d/%m/%y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(texto, fmt).date()
+        except ValueError:
+            continue
+    dt_parsed = pd.to_datetime(texto, errors="coerce", dayfirst=True)
+    if pd.notna(dt_parsed):
+        return dt_parsed.date()
+    return fecha_defecto
+
+def parsear_hora_excel(valor, hora_defecto):
+    if valor is None or str(valor).strip() == "" or pd.isna(valor):
+        return hora_defecto
+    if isinstance(valor, datetime):
+        return valor.time().replace(second=0, microsecond=0)
+    if isinstance(valor, time):
+        return valor.replace(second=0, microsecond=0)
+    texto = str(valor).strip()
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p"):
+        try:
+            return datetime.strptime(texto, fmt).time().replace(second=0, microsecond=0)
+        except ValueError:
+            continue
+    dt_parsed = pd.to_datetime(texto, errors="coerce")
+    if pd.notna(dt_parsed):
+        return dt_parsed.time().replace(second=0, microsecond=0)
+    return hora_defecto
 
 def generar_excel_bytes(df_data):
     buf = BytesIO()
@@ -237,11 +273,11 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
     except Exception as exc2:
         return False, f"No se pudo enviar el correo ({exc2 or ultimo_error})."
 
-def normalizar_excel_masivo(archivo):
+def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto):
     if archivo.name.lower().endswith(".xlsx"):
-        df_raw = pd.read_excel(archivo).fillna("")
+        df_raw = pd.read_excel(archivo)
     else:
-        df_raw = pd.read_csv(archivo).fillna("")
+        df_raw = pd.read_csv(archivo)
 
     mapa_cols = {}
     for col in df_raw.columns:
@@ -254,6 +290,12 @@ def normalizar_excel_masivo(archivo):
             mapa_cols[col] = "correo"
         elif clave in {"tipo", "tipo_de_pase", "tipo_pase", "pase", "entrada", "ticket"}:
             mapa_cols[col] = "tipo"
+        elif clave in {"nombre_del_evento", "nombre_evento", "evento", "fiesta"}:
+            mapa_cols[col] = "evento"
+        elif clave in {"fecha_caducidad", "fecha_de_caducidad", "fecha_limite", "fecha", "caducidad_fecha"}:
+            mapa_cols[col] = "fecha_caducidad"
+        elif clave in {"hora_limite", "hora_de_caducidad", "hora_caducidad", "hora", "limite_hora"}:
+            mapa_cols[col] = "hora_limite"
 
     df_norm = df_raw.rename(columns=mapa_cols)
     for req in ["nombre", "rut", "correo"]:
@@ -261,23 +303,47 @@ def normalizar_excel_masivo(archivo):
             return None, f"Falta la columna obligatoria `{req}` en el archivo."
     if "tipo" not in df_norm.columns:
         df_norm["tipo"] = "General"
+    if "evento" not in df_norm.columns:
+        df_norm["evento"] = evento_defecto
+    if "fecha_caducidad" not in df_norm.columns:
+        df_norm["fecha_caducidad"] = fecha_defecto
+    if "hora_limite" not in df_norm.columns:
+        df_norm["hora_limite"] = hora_defecto
 
     registros = []
     advertencias = []
     for idx, row in df_norm.iterrows():
-        nom = str(row["nombre"]).strip()
-        rt = str(row["rut"]).strip()
-        cor = str(row["correo"]).strip()
-        tp = str(row["tipo"]).strip() or "General"
-        if not nom and not rt and not cor:
+        val_nom = "" if pd.isna(row["nombre"]) else str(row["nombre"]).strip()
+        val_rut = "" if pd.isna(row["rut"]) else str(row["rut"]).strip()
+        val_cor = "" if pd.isna(row["correo"]) else str(row["correo"]).strip()
+        val_tp = "" if pd.isna(row["tipo"]) else str(row["tipo"]).strip()
+        val_ev = "" if pd.isna(row["evento"]) else str(row["evento"]).strip()
+
+        if not val_nom and not val_rut and not val_cor:
             continue
-        if not nom or not rt:
+        if not val_nom or not val_rut:
             advertencias.append(f"Fila {idx + 2}: omitida por faltar nombre o RUT.")
             continue
-        if cor and not correo_valido(cor):
-            advertencias.append(f"Fila {idx + 2} ({nom}): correo `{cor}` con formato inválido (no se enviará correo).")
-            cor = ""
-        registros.append({"nombre": nom, "rut": rt, "correo": cor, "tipo": tp})
+
+        tp = val_tp or "General"
+        ev = val_ev or evento_defecto
+        fec_obj = parsear_fecha_excel(row["fecha_caducidad"], fecha_defecto)
+        hor_obj = parsear_hora_excel(row["hora_limite"], hora_defecto)
+        cad_str = f"{fec_obj.strftime('%Y-%m-%d')} {hor_obj.strftime('%H:%M')}"
+
+        cor_limpio = val_cor
+        if cor_limpio and not correo_valido(cor_limpio):
+            advertencias.append(f"Fila {idx + 2} ({val_nom}): correo `{cor_limpio}` con formato inválido (no se enviará correo).")
+            cor_limpio = ""
+
+        registros.append({
+            "nombre": val_nom,
+            "rut": val_rut,
+            "correo": cor_limpio,
+            "tipo": tp,
+            "evento": ev,
+            "caducidad": cad_str,
+        })
 
     if not registros:
         return None, "No se encontraron filas válidas con nombre y RUT en el archivo."
@@ -407,25 +473,6 @@ st.markdown("""
         background-color: #2e1065 !important;
         color: #22d3ee !important;
     }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: #121217;
-        padding: 6px;
-        border-radius: 10px;
-        border: 1px solid #3f3f46;
-    }
-    .stTabs [data-baseweb="tab"] p {
-        color: #d4d4d8 !important;
-        font-weight: 600 !important;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #2e1065 !important;
-        border: 1px solid #9333ea !important;
-        border-radius: 6px;
-    }
-    .stTabs [aria-selected="true"] p {
-        color: #22d3ee !important;
-    }
     .ticket-card {
         background: linear-gradient(135deg, #18181b 0%, #1e1b4b 100%);
         border: 2px solid #22d3ee;
@@ -462,43 +509,18 @@ USUARIOS_ADMIN = {
     "Piero.corci": "Colectivo2026"
 }
 
-if "autenticado" not in st.session_state:
-    st.session_state.autenticado = False
+if "rol_sesion" not in st.session_state:
+    st.session_state.rol_sesion = None
 if "usuario_actual" not in st.session_state:
     st.session_state.usuario_actual = ""
-if "admin_usuario" not in st.session_state:
-    st.session_state.admin_usuario = None
+if "modo_login_portada" not in st.session_state:
+    st.session_state.modo_login_portada = None
+if "vista_admin" not in st.session_state:
+    st.session_state.vista_admin = "generar"
 if "borrador_qr" not in st.session_state:
     st.session_state.borrador_qr = None
 if "borrador_masivo" not in st.session_state:
     st.session_state.borrador_masivo = None
-
-# ==========================================
-# 🚪 PORTADA DE INICIO DE SESIÓN CON LOGO
-# ==========================================
-if not st.session_state.autenticado:
-    if os.path.exists("logo.png"):
-        st.image("logo.png", use_container_width=True)
-    else:
-        st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
-
-    st.markdown("<p style='text-align: center; color: #22d3ee !important; letter-spacing: 3px; font-size: 14px;'>ELECTRONIC MUSIC // ACCESS CONTROL</p>", unsafe_allow_html=True)
-    st.divider()
-
-    with st.form("form_login"):
-        usuario = st.text_input("USUARIO")
-        clave = st.text_input("CONTRASEÑA", type="password")
-        entrar = st.form_submit_button("INGRESAR AL SISTEMA", type="primary", use_container_width=True)
-
-        if entrar:
-            if usuario in USUARIOS_ACCESO and USUARIOS_ACCESO[usuario] == clave:
-                st.session_state.autenticado = True
-                st.session_state.usuario_actual = usuario
-                st.rerun()
-            else:
-                st.error("Acceso denegado. Usuario o contraseña incorrectos.")
-
-    st.stop()
 
 # --- BASE DE DATOS LOCAL (SQLite) ---
 def init_db():
@@ -545,22 +567,74 @@ def obtener_eventos():
     c.execute("SELECT nombre, caducidad FROM eventos ORDER BY nombre ASC")
     return dict(c.fetchall())
 
-def pedir_acceso_admin(id_pestana):
-    if st.session_state.admin_usuario is not None:
-        return True
+# ==========================================
+# 🚪 PORTADA DE INICIO DE SESIÓN SEPARADA
+# ==========================================
+if st.session_state.rol_sesion is None:
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    else:
+        st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
 
-    st.warning("🔒 ZONA RESTRINGIDA — SOLO PRODUCCIÓN")
-    with st.form(f"form_admin_{id_pestana}"):
-        admin_user = st.text_input("Usuario producción")
-        admin_pass = st.text_input("Contraseña", type="password")
-        desbloquear = st.form_submit_button("DESBLOQUEAR", type="primary", use_container_width=True)
-        if desbloquear:
-            if admin_user in USUARIOS_ADMIN and USUARIOS_ADMIN[admin_user] == admin_pass:
-                st.session_state.admin_usuario = admin_user
-                st.rerun()
-            else:
-                st.error("Credenciales de producción incorrectas.")
-    return False
+    st.markdown(
+        "<p style='text-align: center; color: #22d3ee !important; letter-spacing: 3px; font-size: 14px;'>"
+        "ELECTRONIC MUSIC // ACCESS CONTROL</p>",
+        unsafe_allow_html=True
+    )
+    st.divider()
+
+    st.markdown(
+        "<p style='text-align: center; font-size: 15px; margin-bottom: 14px;'>"
+        "Selecciona el tipo de acceso para continuar:</p>",
+        unsafe_allow_html=True
+    )
+
+    col_btn_puerta, col_btn_prod = st.columns(2)
+    with col_btn_puerta:
+        if st.button("📷 ACCESO PUERTA / SCAN", type="primary", use_container_width=True):
+            st.session_state.modo_login_portada = "puerta"
+            st.rerun()
+    with col_btn_prod:
+        if st.button("🔒 ACCESO PRODUCCIÓN", use_container_width=True):
+            st.session_state.modo_login_portada = "admin"
+            st.rerun()
+
+    if st.session_state.modo_login_portada == "puerta":
+        st.divider()
+        st.subheader("📷 INGRESO EQUIPO DE PUERTA")
+        with st.form("form_login_puerta"):
+            usuario = st.text_input("Usuario de puerta")
+            clave = st.text_input("Contraseña", type="password")
+            entrar = st.form_submit_button("ENTRAR A PUERTA / SCAN", type="primary", use_container_width=True)
+
+            if entrar:
+                if usuario in USUARIOS_ACCESO and USUARIOS_ACCESO[usuario] == clave:
+                    st.session_state.rol_sesion = "puerta"
+                    st.session_state.usuario_actual = usuario
+                    st.session_state.modo_login_portada = None
+                    st.rerun()
+                else:
+                    st.error("Acceso de puerta denegado. Usuario o contraseña incorrectos.")
+
+    elif st.session_state.modo_login_portada == "admin":
+        st.divider()
+        st.subheader("🔒 INGRESO PRODUCCIÓN / ADMIN")
+        with st.form("form_login_admin"):
+            usuario = st.text_input("Usuario producción")
+            clave = st.text_input("Contraseña", type="password")
+            entrar = st.form_submit_button("ENTRAR A PRODUCCIÓN", type="primary", use_container_width=True)
+
+            if entrar:
+                if usuario in USUARIOS_ADMIN and USUARIOS_ADMIN[usuario] == clave:
+                    st.session_state.rol_sesion = "admin"
+                    st.session_state.usuario_actual = usuario
+                    st.session_state.modo_login_portada = None
+                    st.session_state.vista_admin = "generar"
+                    st.rerun()
+                else:
+                    st.error("Credenciales de producción incorrectas.")
+
+    st.stop()
 
 # --- BARRA SUPERIOR ---
 col_tit, col_salir = st.columns([3, 1])
@@ -572,22 +646,21 @@ with col_tit:
 with col_salir:
     st.write("")
     if st.button("SALIR", use_container_width=True):
-        st.session_state.autenticado = False
+        st.session_state.rol_sesion = None
         st.session_state.usuario_actual = ""
-        st.session_state.admin_usuario = None
+        st.session_state.modo_login_portada = None
         st.session_state.borrador_qr = None
         st.session_state.borrador_masivo = None
         st.rerun()
 
-st.caption(f"🟢 EN LÍNEA: **{st.session_state.usuario_actual}** | 🕒 Hora Chile: {ahora_chile().strftime('%d/%m/%Y %H:%M')}")
-
-tab1, tab2, tab3 = st.tabs(["📷 PUERTA / SCAN", "🔒 GENERAR QR", "🔒 LISTA & BACKUP"])
+etiqueta_rol = "PUERTA / SCAN" if st.session_state.rol_sesion == "puerta" else "PRODUCCIÓN"
+st.caption(f"🟢 {etiqueta_rol}: **{st.session_state.usuario_actual}** | 🕒 Hora Chile: {ahora_chile().strftime('%d/%m/%Y %H:%M')}")
 
 # ==========================================
-# PESTAÑA 1: VALIDAR EN PUERTA
+# VISTA EXCLUSIVA PUERTA / SCAN
 # ==========================================
-with tab1:
-    st.subheader("CHECK-IN DE ACCESO")
+if st.session_state.rol_sesion == "puerta":
+    st.subheader("📷 CHECK-IN DE ACCESO EN PUERTA")
 
     eventos_dict = obtener_eventos()
     opciones_puerta = ["Todos los eventos"] + list(eventos_dict.keys())
@@ -660,12 +733,30 @@ with tab1:
                     st.rerun()
 
 # ==========================================
-# PESTAÑA 2: GENERAR ENTRADA (ADMIN)
+# VISTA PRODUCCIÓN / ADMIN (BOTONES SIN PESTAÑAS)
 # ==========================================
-with tab2:
-    if pedir_acceso_admin("tab2"):
-        st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
+elif st.session_state.rol_sesion == "admin":
+    col_nav1, col_nav2 = st.columns(2)
+    with col_nav1:
+        if st.button(
+            "⚡ GENERAR QR",
+            type="primary" if st.session_state.vista_admin == "generar" else "secondary",
+            use_container_width=True
+        ):
+            st.session_state.vista_admin = "generar"
+            st.rerun()
+    with col_nav2:
+        if st.button(
+            "📊 LISTA & BACKUP",
+            type="primary" if st.session_state.vista_admin == "lista" else "secondary",
+            use_container_width=True
+        ):
+            st.session_state.vista_admin = "lista"
+            st.rerun()
 
+    st.divider()
+
+    if st.session_state.vista_admin == "generar":
         with st.expander("➕ CREAR O EDITAR EVENTO (QUEDA GUARDADO)", expanded=(len(obtener_eventos()) == 0)):
             with st.form("form_nuevo_evento", clear_on_submit=True):
                 col_ev, col_fec, col_hor = st.columns([2, 1.2, 1])
@@ -693,6 +784,9 @@ with tab2:
 
         if not eventos_guardados:
             st.warning("Primero crea y guarda al menos un evento en el menú de arriba ⬆️.")
+            evento_defecto_masivo = "KALMA"
+            fecha_defecto_masivo = ahora_chile().date()
+            hora_defecto_masivo = time(6, 0)
         else:
             col_sel_ev, col_sel_fec, col_sel_hor = st.columns([2, 1.2, 1])
             with col_sel_ev:
@@ -710,6 +804,9 @@ with tab2:
             with col_sel_hor:
                 hora_qr = st.time_input("Hora límite QR", value=def_hora, key=f"hor_{evento_elegido}")
             caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
+            evento_defecto_masivo = evento_elegido
+            fecha_defecto_masivo = fecha_qr
+            hora_defecto_masivo = hora_qr
 
             with st.form("form_crear"):
                 nombre = st.text_input("Nombre Completo")
@@ -750,7 +847,7 @@ with tab2:
                     if st.button("✅ SÍ, GENERAR Y ENVIAR", type="primary", use_container_width=True):
                         codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                         ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
-                        creador = st.session_state.admin_usuario
+                        creador = st.session_state.usuario_actual
                         c = conn.cursor()
                         c.execute(
                             "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -781,74 +878,81 @@ with tab2:
                         st.session_state.borrador_qr = None
                         st.rerun()
 
-            # --- CARGA MASIVA DESDE EXCEL ---
-            st.divider()
-            with st.expander("📦 CARGA MASIVA DE QR DESDE EXCEL (NOMBRE, RUT, CORREO, TIPO)"):
-                st.caption("Columnas esperadas: `nombre`, `rut`, `correo`, `tipo` (se aplicarán al evento y caducidad seleccionados arriba).")
-                archivo_masivo = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV", type=["xlsx", "csv"], key="uploader_masivo")
+        st.divider()
+        with st.expander("📦 CARGA MASIVA DE QR DESDE EXCEL"):
+            st.caption(
+                "Columnas en el Excel: `nombre`, `rut`, `correo`, `tipo` (o `tipo de pase`), "
+                "**`Nombre del Evento`**, **`Fecha caducidad`** y **`Hora límite`**."
+            )
+            archivo_masivo = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV", type=["xlsx", "csv"], key="uploader_masivo")
 
-                if archivo_masivo is not None:
-                    if st.button("📋 REVISAR LISTADO ANTES DE ENVIAR", type="primary", use_container_width=True):
-                        resultado, err_masivo = normalizar_excel_masivo(archivo_masivo)
-                        if err_masivo:
-                            st.error(err_masivo)
-                        else:
-                            st.session_state.borrador_masivo = {
-                                "evento": evento_elegido,
-                                "caducidad": caducidad_final,
-                                "registros": resultado["registros"],
-                                "advertencias": resultado["advertencias"],
-                            }
-                            st.rerun()
+            if archivo_masivo is not None:
+                if st.button("📋 REVISAR LISTADO ANTES DE ENVIAR", type="primary", use_container_width=True):
+                    resultado, err_masivo = normalizar_excel_masivo(
+                        archivo_masivo, evento_defecto_masivo, fecha_defecto_masivo, hora_defecto_masivo
+                    )
+                    if err_masivo:
+                        st.error(err_masivo)
+                    else:
+                        st.session_state.borrador_masivo = {
+                            "registros": resultado["registros"],
+                            "advertencias": resultado["advertencias"],
+                        }
+                        st.rerun()
 
-                if st.session_state.borrador_masivo is not None:
-                    bm = st.session_state.borrador_masivo
-                    total_regs = len(bm["registros"])
-                    con_correo = sum(1 for r in bm["registros"] if r["correo"])
-                    st.warning(f"❓ **¿Estás seguro de generar y enviar {total_regs} E-Tickets?** ({con_correo} con correo para envío automático al evento **{bm['evento']}**, caducidad **{bm['caducidad']}**).")
-                    st.dataframe(pd.DataFrame(bm["registros"]), use_container_width=True, hide_index=True)
+            if st.session_state.borrador_masivo is not None:
+                bm = st.session_state.borrador_masivo
+                total_regs = len(bm["registros"])
+                con_correo = sum(1 for r in bm["registros"] if r["correo"])
+                st.warning(
+                    f"❓ **¿Estás seguro de generar y enviar {total_regs} E-Tickets?** "
+                    f"({con_correo} con correo para envío automático según el evento y caducidad de cada fila)."
+                )
+                st.dataframe(pd.DataFrame(bm["registros"]), use_container_width=True, hide_index=True)
 
-                    for adv in bm["advertencias"]:
-                        st.caption(f"⚠️ {adv}")
+                for adv in bm["advertencias"]:
+                    st.caption(f"⚠️ {adv}")
 
-                    col_m_ok, col_m_no = st.columns(2)
-                    with col_m_ok:
-                        if st.button("🚀 SÍ, GENERAR Y ENVIAR TODOS", type="primary", use_container_width=True):
-                            c = conn.cursor()
-                            creador = st.session_state.admin_usuario
-                            ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
-                            enviados_ok = 0
-                            enviados_err = 0
-                            barra = st.progress(0)
-                            estado_txt = st.empty()
+                col_m_ok, col_m_no = st.columns(2)
+                with col_m_ok:
+                    if st.button("🚀 SÍ, GENERAR Y ENVIAR TODOS", type="primary", use_container_width=True):
+                        c = conn.cursor()
+                        creador = st.session_state.usuario_actual
+                        ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
+                        enviados_ok = 0
+                        enviados_err = 0
+                        barra = st.progress(0)
+                        estado_txt = st.empty()
 
-                            for i, reg in enumerate(bm["registros"]):
-                                estado_txt.text(f"Procesando {i + 1}/{total_regs}: {reg['nombre']}...")
-                                codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
-                                c.execute(
-                                    "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                    (codigo_unico, reg["nombre"], reg["rut"], reg["correo"], reg["tipo"], "DISPONIBLE", ahora_str, "", creador, bm["evento"], bm["caducidad"])
+                        for i, reg in enumerate(bm["registros"]):
+                            estado_txt.text(f"Procesando {i + 1}/{total_regs}: {reg['nombre']}...")
+                            codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
+                            if reg["evento"]:
+                                c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (reg["evento"], reg["caducidad"]))
+                            c.execute(
+                                "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (codigo_unico, reg["nombre"], reg["rut"], reg["correo"], reg["tipo"], "DISPONIBLE", ahora_str, "", creador, reg["evento"], reg["caducidad"])
+                            )
+                            if reg["correo"]:
+                                ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, reg["nombre"], reg["rut"], reg["tipo"], reg["evento"], reg["caducidad"])
+                                ok_m, _ = enviar_qr_por_correo(
+                                    reg["correo"], reg["nombre"], reg["rut"], reg["tipo"], reg["evento"], reg["caducidad"], codigo_unico, ticket_bytes
                                 )
-                                if reg["correo"]:
-                                    ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, reg["nombre"], reg["rut"], reg["tipo"], bm["evento"], bm["caducidad"])
-                                    ok_m, _ = enviar_qr_por_correo(
-                                        reg["correo"], reg["nombre"], reg["rut"], reg["tipo"], bm["evento"], bm["caducidad"], codigo_unico, ticket_bytes
-                                    )
-                                    if ok_m:
-                                        enviados_ok += 1
-                                    else:
-                                        enviados_err += 1
-                                    pytime.sleep(0.25)
-                                barra.progress((i + 1) / total_regs)
+                                if ok_m:
+                                    enviados_ok += 1
+                                else:
+                                    enviados_err += 1
+                                pytime.sleep(0.25)
+                            barra.progress((i + 1) / total_regs)
 
-                            conn.commit()
-                            st.session_state.borrador_masivo = None
-                            estado_txt.empty()
-                            st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos enviados | {enviados_err} con error de envío.")
-                    with col_m_no:
-                        if st.button("❌ CANCELAR LOTE", use_container_width=True):
-                            st.session_state.borrador_masivo = None
-                            st.rerun()
+                        conn.commit()
+                        st.session_state.borrador_masivo = None
+                        estado_txt.empty()
+                        st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos enviados | {enviados_err} con error de envío.")
+                with col_m_no:
+                    if st.button("❌ CANCELAR LOTE", use_container_width=True):
+                        st.session_state.borrador_masivo = None
+                        st.rerun()
 
         ultimo = st.session_state.get("ultimo_qr")
         if isinstance(ultimo, (list, tuple)) and len(ultimo) == 8:
@@ -867,12 +971,7 @@ with tab2:
         elif "ultimo_qr" in st.session_state:
             del st.session_state["ultimo_qr"]
 
-# ==========================================
-# PESTAÑA 3: LISTA Y RESPALDO (ADMIN)
-# ==========================================
-with tab3:
-    if pedir_acceso_admin("tab3"):
-        st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
+    elif st.session_state.vista_admin == "lista":
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
 
         col_f1, col_f2 = st.columns([1.2, 1.8])
@@ -941,8 +1040,3 @@ with tab3:
                 st.success("Base de datos restaurada correctamente.")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
-
-        st.divider()
-        if st.button("🔒 BLOQUEAR ZONA DE PRODUCCIÓN", use_container_width=True):
-            st.session_state.admin_usuario = None
-            st.rerun()

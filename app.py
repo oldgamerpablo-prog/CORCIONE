@@ -66,7 +66,6 @@ st.markdown("""
         color: #22d3ee !important;
         font-weight: 700 !important;
     }
-    /* File uploader oscuro y legible */
     [data-testid="stFileUploader"] section {
         background-color: #121217 !important;
         border: 1px dashed #9333ea !important;
@@ -459,7 +458,7 @@ with tab2:
                 crear = st.form_submit_button("⚡ GENERAR E-TICKET QR", type="primary", use_container_width=True)
 
             if crear:
-                if nombre.strip() and rut.strip() and correo.strip():
+                if nombre.strip() and rut.strip():
                     codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                     ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                     caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
@@ -473,13 +472,14 @@ with tab2:
                     st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), correo.strip(), tipo, creador, evento_elegido, caducidad_final)
                     st.success(f"E-Ticket emitido para **{nombre.strip()}** en **{evento_elegido}** (`{codigo_unico}`)")
                 else:
-                    st.error("Debes completar el Nombre, el RUT y el Correo Electrónico.")
+                    st.error("Debes completar el Nombre y el RUT.")
 
-        if "ultimo_qr" in st.session_state:
-            cod, nom, rt, cor, tp, cr, ev, cad = st.session_state["ultimo_qr"]
+        ultimo = st.session_state.get("ultimo_qr")
+        if isinstance(ultimo, (list, tuple)) and len(ultimo) == 8:
+            cod, nom, rt, cor, tp, cr, ev, cad = ultimo
             qr_bytes = generar_imagen_qr(cod)
             st.divider()
-            st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
+            st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor or 'Sin correo'} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
             st.image(qr_bytes, width=250)
             st.download_button(
                 label="📥 DESCARGAR QR PARA ENVIAR",
@@ -488,6 +488,8 @@ with tab2:
                 mime="image/png",
                 use_container_width=True
             )
+        elif "ultimo_qr" in st.session_state:
+            del st.session_state["ultimo_qr"]
 
 # ==========================================
 # PESTAÑA 3: LISTA Y RESPALDO (ADMIN)

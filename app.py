@@ -26,6 +26,9 @@ def limpiar_nombre_archivo(texto):
     limpio = re.sub(r"[^A-Za-z0-9_-]+", "_", texto.strip())
     return limpio.strip("_") or "evento"
 
+def correo_valido(correo):
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", correo.strip()))
+
 def generar_excel_bytes(df_data):
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -33,8 +36,8 @@ def generar_excel_bytes(df_data):
     return buf.getvalue()
 
 def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, qr_bytes):
-    remitente = st.secrets.get("SMTP_EMAIL", "")
-    clave_app = st.secrets.get("SMTP_APP_PASSWORD", "")
+    remitente = st.secrets.get("SMTP_EMAIL", "").strip()
+    clave_app = st.secrets.get("SMTP_APP_PASSWORD", "").strip()
     if not remitente or not clave_app:
         return False, "Falta configurar SMTP_EMAIL y SMTP_APP_PASSWORD en Streamlit Secrets."
 
@@ -60,10 +63,25 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         filename=f"KALMA_{limpiar_nombre_archivo(evento)}_{codigo}.png"
     )
 
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(remitente, clave_app)
-        smtp.send_message(msg)
-    return True, f"QR enviado a {destinatario}."
+    ultimo_error = None
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+            smtp.login(remitente, clave_app)
+            smtp.send_message(msg)
+        return True, f"QR enviado a {destinatario}."
+    except Exception as exc:
+        ultimo_error = exc
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(remitente, clave_app)
+            smtp.send_message(msg)
+        return True, f"QR enviado a {destinatario}."
+    except Exception as exc2:
+        return False, f"No se pudo enviar el correo ({exc2 or ultimo_error}). Revisa que el correo exista y tenga dominio válido."
 
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
@@ -527,6 +545,12 @@ with tab2:
             st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor or 'Sin correo'} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
             st.image(qr_bytes, width=250)
 
+            correo_verificar = st.text_input(
+                "✉️ Verificar correo antes de enviar:",
+                value=cor,
+                key=f"verificar_correo_{cod}"
+            ).strip()
+
             col_dl, col_mail = st.columns(2)
             with col_dl:
                 st.download_button(
@@ -538,17 +562,21 @@ with tab2:
                 )
             with col_mail:
                 if st.button("📧 ENVIAR QR POR CORREO", type="primary", use_container_width=True):
-                    if not cor.strip():
-                        st.error("Esta entrada no tiene correo electrónico registrado.")
+                    if not correo_verificar:
+                        st.error("Debes ingresar un correo electrónico para enviar.")
+                    elif not correo_valido(correo_verificar):
+                        st.warning(f"Revisa el correo `{correo_verificar}`: parece mal escrito (ej: falta un punto o dominio).")
                     else:
-                        try:
-                            ok, msg_correo = enviar_qr_por_correo(cor.strip(), nom, rt, tp, ev, cad, cod, qr_bytes)
-                            if ok:
-                                st.success(msg_correo)
-                            else:
-                                st.error(msg_correo)
-                        except Exception as exc:
-                            st.error(f"No se pudo enviar el correo: {exc}")
+                        if correo_verificar != cor:
+                            c = conn.cursor()
+                            c.execute("UPDATE entradas SET correo = ? WHERE codigo = ?", (correo_verificar, cod))
+                            conn.commit()
+                            st.session_state["ultimo_qr"] = (cod, nom, rt, correo_verificar, tp, cr, ev, cad)
+                        ok, msg_correo = enviar_qr_por_correo(correo_verificar, nom, rt, tp, ev, cad, cod, qr_bytes)
+                        if ok:
+                            st.success(msg_correo)
+                        else:
+                            st.error(msg_correo)
         elif "ultimo_qr" in st.session_state:
             del st.session_state["ultimo_qr"]
 

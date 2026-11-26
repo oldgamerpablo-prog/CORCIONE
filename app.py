@@ -90,12 +90,41 @@ st.markdown("""
         border: 1px solid #52525b !important;
         border-radius: 8px !important;
     }
-    .stTextInput > div > div > input,
-    .stSelectbox > div > div {
+    .stTextInput > div > div > input {
         background-color: #18181b !important;
         color: #ffffff !important;
         border: 1px solid #7e22ce !important;
         border-radius: 8px !important;
+    }
+    /* Selectbox: texto visible, fondo oscuro y menú desplegable legible */
+    .stSelectbox [data-baseweb="select"] > div {
+        background-color: #18181b !important;
+        color: #ffffff !important;
+        border: 1px solid #9333ea !important;
+        border-radius: 8px !important;
+    }
+    .stSelectbox [data-baseweb="select"] span,
+    .stSelectbox [data-baseweb="select"] div,
+    .stSelectbox [data-baseweb="select"] input,
+    .stSelectbox [data-baseweb="select"] svg {
+        color: #ffffff !important;
+        fill: #22d3ee !important;
+    }
+    [data-baseweb="popover"] > div,
+    [data-baseweb="menu"],
+    [role="listbox"] {
+        background-color: #18181b !important;
+        color: #ffffff !important;
+        border: 1px solid #9333ea !important;
+    }
+    [role="option"] {
+        background-color: #18181b !important;
+        color: #ffffff !important;
+    }
+    [role="option"]:hover,
+    [aria-selected="true"][role="option"] {
+        background-color: #2e1065 !important;
+        color: #22d3ee !important;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;

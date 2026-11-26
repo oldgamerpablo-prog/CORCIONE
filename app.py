@@ -156,7 +156,15 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
     tarjeta.save(buf, format="PNG")
     return buf.getvalue()
 
-def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
+def obtener_correo_renominacion(conn, remitente_defecto):
+    c = conn.cursor()
+    c.execute("SELECT valor FROM configuracion WHERE clave = 'correo_renominacion'")
+    fila = c.fetchone()
+    if fila and str(fila[0]).strip():
+        return str(fila[0]).strip()
+    return remitente_defecto
+
+def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes, correo_contacto=""):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
     clave_app = st.secrets.get("SMTP_APP_PASSWORD", "").strip()
     if not remitente or not clave_app:
@@ -165,6 +173,8 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
     destino_individual = str(destinatario).strip()
     if not destino_individual:
         return False, "Correo de destino vacío."
+
+    email_renom = (correo_contacto or remitente).strip()
 
     msg = EmailMessage()
     msg["Subject"] = f"¡Bienvenido a {evento}! Tu E-Ticket QR — Colectivo Kalma"
@@ -182,7 +192,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         f"Presenta el E-Ticket adjunto y tu carnet en el acceso.\n\n"
         f"RENOMINACIÓN (CESIÓN O REVENTA):\n"
         f"Si no podrás asistir y transfieres o revendes tu entrada, NO reenvíes el QR sin avisar. "
-        f"Escríbenos indicando el código del ticket ({codigo}), nombre, RUT y correo del nuevo asistente, "
+        f"Escríbenos a {email_renom} indicando el código del ticket ({codigo}), nombre, RUT y correo del nuevo asistente, "
         f"junto con el motivo (cesión o reventa). El QR seguirá asociado al titular registrado en el sistema "
         f"hasta que producción actualice los datos, y en puerta se pedirá carnet acorde al registro vigente."
     )
@@ -242,7 +252,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
             </div>
             <p style="margin:0 0 6px 0;">
               Si no podrás asistir y transfieres o revendes tu entrada, <strong>no reenvíes el QR sin avisar</strong>.
-              Escríbenos indicando el código del ticket (<strong>{codigo}</strong>), <strong>nombre</strong>, <strong>RUT</strong> y <strong>correo</strong> del nuevo asistente,
+              Escríbenos a <strong style="color:#22d3ee;">{email_renom}</strong> indicando el código del ticket (<strong>{codigo}</strong>), <strong>nombre</strong>, <strong>RUT</strong> y <strong>correo</strong> del nuevo asistente,
               junto con el motivo (<strong>cesión</strong> o <strong>reventa</strong>).
             </p>
             <p style="margin:0; color:#d4d4d8;">
@@ -571,6 +581,12 @@ def init_db():
             caducidad TEXT
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion (
+            clave TEXT PRIMARY KEY,
+            valor TEXT
+        )
+    """)
     c.execute("PRAGMA table_info(entradas)")
     columnas = [col[1] for col in c.fetchall()]
     if "correo" not in columnas:
@@ -762,6 +778,9 @@ if st.session_state.rol_sesion == "puerta":
 # VISTA PRODUCCIÓN / ADMIN (BOTONES SIN PESTAÑAS)
 # ==========================================
 elif st.session_state.rol_sesion == "admin":
+    remitente_secret = st.secrets.get("SMTP_EMAIL", "").strip()
+    correo_renom_actual = obtener_correo_renominacion(conn, remitente_secret)
+
     col_nav1, col_nav2, col_nav3 = st.columns(3)
     with col_nav1:
         if st.button(
@@ -791,6 +810,28 @@ elif st.session_state.rol_sesion == "admin":
     st.divider()
 
     if st.session_state.vista_admin == "generar":
+        with st.expander("✉️ CASILLA DE EMAIL PARA RENOMINACIÓN / CONTACTO"):
+            st.caption("Este correo aparecerá en el aviso de renominación del ticket para que los asistentes soliciten cesiones o reventas.")
+            with st.form("form_casilla_renom"):
+                nueva_casilla_email = st.text_input(
+                    "Correo de contacto / renominación",
+                    value=correo_renom_actual,
+                    placeholder="ej: renominaciones@colectivokalma.cl"
+                )
+                guardar_casilla = st.form_submit_button("💾 GUARDAR CASILLA DE EMAIL", use_container_width=True)
+                if guardar_casilla:
+                    if nueva_casilla_email.strip() and not correo_valido(nueva_casilla_email.strip()):
+                        st.error("Ingresa un correo válido o déjalo vacío para usar el remitente SMTP.")
+                    else:
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT OR REPLACE INTO configuracion VALUES ('correo_renominacion', ?)",
+                            (nueva_casilla_email.strip(),)
+                        )
+                        conn.commit()
+                        st.success("Casilla de correo actualizada.")
+                        st.rerun()
+
         with st.expander("➕ CREAR O EDITAR EVENTO (QUEDA GUARDADO)", expanded=(len(obtener_eventos()) == 0)):
             with st.form("form_nuevo_evento", clear_on_submit=True):
                 col_ev, col_fec, col_hor = st.columns([2, 1.2, 1])
@@ -897,7 +938,7 @@ elif st.session_state.rol_sesion == "admin":
                         correo_unificado = str(b["correo"]).strip()
                         if correo_unificado:
                             ok_mail, detalle_mail = enviar_qr_por_correo(
-                                correo_unificado, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"], codigo_unico, ticket_bytes
+                                correo_unificado, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"], codigo_unico, ticket_bytes, correo_renom_actual
                             )
                             if ok_mail:
                                 msg_envio = f" | {detalle_mail}"
@@ -980,7 +1021,7 @@ elif st.session_state.rol_sesion == "admin":
                             if cor_fila:
                                 qr_fila_bytes = generar_tarjeta_qr_bytes(codigo_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila)
                                 ok_m, detalle_m = enviar_qr_por_correo(
-                                    cor_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila, codigo_fila, qr_fila_bytes
+                                    cor_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila, codigo_fila, qr_fila_bytes, correo_renom_actual
                                 )
                                 if ok_m:
                                     enviados_ok += 1
@@ -1165,3 +1206,61 @@ elif st.session_state.rol_sesion == "admin":
                 st.success("Base de datos restaurada correctamente.")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+
+        # --- LIMPIADOR DE EVENTOS Y DETALLES ---
+        st.divider()
+        with st.expander("🧹 LIMPIADOR DE EVENTOS Y REGISTROS"):
+            st.caption("Usa estas herramientas con cuidado para borrar eventos o registros de prueba/detalle.")
+
+            eventos_limpiar = list(obtener_eventos().keys())
+            if eventos_limpiar:
+                st.markdown("**A. Borrar evento guardado**")
+                ev_borrar = st.selectbox("Selecciona evento a borrar:", eventos_limpiar, key="sel_ev_borrar")
+                borrar_entradas_ev = st.checkbox("Borrar también todas las entradas asociadas a este evento", key="chk_borrar_entradas_ev")
+                confirmar_ev = st.checkbox("Confirmo que deseo eliminar este evento", key="chk_conf_ev")
+                if st.button("🗑️ ELIMINAR EVENTO", use_container_width=True):
+                    if not confirmar_ev:
+                        st.warning("Marca la casilla de confirmación antes de eliminar el evento.")
+                    else:
+                        c = conn.cursor()
+                        c.execute("DELETE FROM eventos WHERE nombre = ?", (ev_borrar,))
+                        if borrar_entradas_ev:
+                            c.execute("DELETE FROM entradas WHERE evento = ?", (ev_borrar,))
+                        conn.commit()
+                        st.success(f"Evento **{ev_borrar}** eliminado.")
+                        st.rerun()
+            else:
+                st.caption("No hay eventos guardados para borrar.")
+
+            st.divider()
+            st.markdown("**B. Borrar una entrada específica (detalle)**")
+            if not df.empty:
+                opciones_detalle = [
+                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento']}"
+                    for _, r in df.iterrows()
+                ]
+                sel_detalle = st.selectbox("Selecciona una entrada puntual:", opciones_detalle, key="sel_detalle_borrar")
+                confirmar_det = st.checkbox("Confirmo eliminar esta entrada específica", key="chk_conf_det")
+                if st.button("🗑️ BORRAR ENTRADA SELECCIONADA", use_container_width=True):
+                    if not confirmar_det:
+                        st.warning("Marca la casilla de confirmación antes de borrar la entrada.")
+                    else:
+                        cod_borrar = sel_detalle.split(" — ", 1)[0].strip()
+                        c = conn.cursor()
+                        c.execute("DELETE FROM entradas WHERE codigo = ?", (cod_borrar,))
+                        conn.commit()
+                        st.success(f"Entrada `{cod_borrar}` eliminada.")
+                        st.rerun()
+
+            st.divider()
+            st.markdown("**C. Limpiar todo el historial de entradas**")
+            confirmar_todo = st.checkbox("Confirmo que ya respaldé en Excel y deseo borrar TODAS las entradas", key="chk_conf_todo")
+            if st.button("💣 VACIAR TODAS LAS ENTRADAS", use_container_width=True):
+                if not confirmar_todo:
+                    st.warning("Marca la casilla de confirmación para vaciar la tabla de entradas.")
+                else:
+                    c = conn.cursor()
+                    c.execute("DELETE FROM entradas")
+                    conn.commit()
+                    st.success("Todas las entradas han sido eliminadas.")
+                    st.rerun()

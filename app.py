@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import uuid
+import os
 import pandas as pd
 import qrcode
 import zxingcpp
@@ -11,7 +12,7 @@ from datetime import datetime
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
 
 # ==========================================
-# 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (ALTO CONTRASTE)
+# 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
 # ==========================================
 st.markdown("""
 <style>
@@ -132,10 +133,14 @@ if "admin_usuario" not in st.session_state:
     st.session_state.admin_usuario = None
 
 # ==========================================
-# 🚪 PORTADA DE INICIO DE SESIÓN
+# 🚪 PORTADA DE INICIO DE SESIÓN CON LOGO
 # ==========================================
 if not st.session_state.autenticado:
-    st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    else:
+        st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
+
     st.markdown("<p style='text-align: center; color: #22d3ee !important; letter-spacing: 3px; font-size: 14px;'>ELECTRONIC MUSIC // ACCESS CONTROL</p>", unsafe_allow_html=True)
     st.divider()
 
@@ -208,7 +213,10 @@ def pedir_acceso_admin(id_pestana):
 # --- BARRA SUPERIOR ---
 col_tit, col_salir = st.columns([3, 1])
 with col_tit:
-    st.markdown("## ⚡ COLECTIVO KALMA")
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=220)
+    else:
+        st.markdown("## ⚡ COLECTIVO KALMA")
 with col_salir:
     st.write("")
     if st.button("SALIR", use_container_width=True):

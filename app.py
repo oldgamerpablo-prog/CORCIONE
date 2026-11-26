@@ -49,7 +49,6 @@ def cargar_fuente(tamano, bold=False):
     return ImageFont.load_default()
 
 def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
-    # QR base
     qr = qrcode.QRCode(version=1, box_size=8, border=2)
     qr.add_data(codigo)
     qr.make(fit=True)
@@ -57,12 +56,10 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
     qr_size = 260
     qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.NEAREST)
 
-    # Lienzo tipo E-Ticket oscuro
     ancho, alto = 560, 760
     tarjeta = Image.new("RGB", (ancho, alto), "#0d0a14")
     draw = ImageDraw.Draw(tarjeta)
 
-    # Marco exterior neón
     draw.rounded_rectangle([14, 14, ancho - 14, alto - 14], radius=24, outline="#9333ea", width=3)
     draw.rounded_rectangle([22, 22, ancho - 22, 120], radius=18, fill="#1b102b", outline="#22d3ee", width=2)
 
@@ -90,11 +87,9 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
         draw.text((ancho // 2, 54), "COLECTIVO KALMA", fill="#ffffff", font=f_titulo, anchor="mm")
         draw.text((ancho // 2, 88), "ELECTRONIC MUSIC // OFFICIAL E-TICKET", fill="#22d3ee", font=f_sub, anchor="mm")
 
-    # Nombre del evento y pase
     draw.text((ancho // 2, 152), evento.upper(), fill="#22d3ee", font=f_evento, anchor="mm")
     draw.text((ancho // 2, 182), f"PASE: {tipo.upper()}", fill="#d8b4fe", font=f_sub, anchor="mm")
 
-    # Caja blanca para el QR
     qr_box_x0 = (ancho - (qr_size + 28)) // 2
     qr_box_y0 = 205
     qr_box_x1 = qr_box_x0 + qr_size + 28
@@ -104,7 +99,6 @@ def generar_tarjeta_qr_bytes(codigo, nombre, rut, tipo, evento, caducidad):
 
     draw.text((ancho // 2, qr_box_y1 + 24), f"ID: {codigo}", fill="#22d3ee", font=f_cod, anchor="mm")
 
-    # Datos del asistente
     info_y = qr_box_y1 + 54
     draw.rounded_rectangle([42, info_y, ancho - 42, alto - 42], radius=16, fill="#14121d", outline="#3f3f46", width=1)
 
@@ -211,7 +205,6 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
     """
     msg.add_alternative(html_cuerpo, subtype="html")
 
-    # Imágenes embebidas (CID) + adjunto descargable
     if logo_bytes:
         msg.get_payload()[1].add_related(logo_bytes, maintype="image", subtype="png", cid="<logo_kalma>")
 
@@ -228,7 +221,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"E-Ticket de bienvenida enviado a {destinatario}."
+        return True, f"E-Ticket enviado automáticamente a {destinatario}."
     except Exception as exc:
         ultimo_error = exc
 
@@ -239,9 +232,9 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
             smtp.ehlo()
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"E-Ticket de bienvenida enviado a {destinatario}."
+        return True, f"E-Ticket enviado automáticamente a {destinatario}."
     except Exception as exc2:
-        return False, f"No se pudo enviar el correo ({exc2 or ultimo_error}). Revisa que el correo exista y tenga dominio válido."
+        return False, f"No se pudo enviar el correo ({exc2 or ultimo_error})."
 
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
@@ -428,6 +421,8 @@ if "usuario_actual" not in st.session_state:
     st.session_state.usuario_actual = ""
 if "admin_usuario" not in st.session_state:
     st.session_state.admin_usuario = None
+if "borrador_qr" not in st.session_state:
+    st.session_state.borrador_qr = None
 
 # ==========================================
 # 🚪 PORTADA DE INICIO DE SESIÓN CON LOGO
@@ -531,6 +526,7 @@ with col_salir:
         st.session_state.autenticado = False
         st.session_state.usuario_actual = ""
         st.session_state.admin_usuario = None
+        st.session_state.borrador_qr = None
         st.rerun()
 
 st.caption(f"🟢 EN LÍNEA: **{st.session_state.usuario_actual}** | 🕒 Hora Chile: {ahora_chile().strftime('%d/%m/%Y %H:%M')}")
@@ -664,7 +660,7 @@ with tab2:
             with col_sel_hor:
                 hora_qr = st.time_input("Hora límite QR", value=def_hora, key=f"hor_{evento_elegido}")
 
-            with st.form("form_crear", clear_on_submit=True):
+            with st.form("form_crear"):
                 nombre = st.text_input("Nombre Completo")
                 rut = st.text_input("RUT / Carnet (ej: 12.345.678-9)")
                 correo = st.text_input("Correo Electrónico (ej: nombre@correo.com)")
@@ -672,21 +668,68 @@ with tab2:
                 crear = st.form_submit_button("⚡ GENERAR E-TICKET QR", type="primary", use_container_width=True)
 
             if crear:
-                if nombre.strip() and rut.strip():
-                    codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
-                    ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
-                    caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
-                    creador = st.session_state.admin_usuario
-                    c = conn.cursor()
-                    c.execute(
-                        "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (codigo_unico, nombre.strip(), rut.strip(), correo.strip(), tipo, "DISPONIBLE", ahora_str, "", creador, evento_elegido, caducidad_final)
-                    )
-                    conn.commit()
-                    st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), correo.strip(), tipo, creador, evento_elegido, caducidad_final)
-                    st.success(f"E-Ticket emitido para **{nombre.strip()}** en **{evento_elegido}** (`{codigo_unico}`)")
-                else:
+                if not nombre.strip() or not rut.strip():
                     st.error("Debes completar el Nombre y el RUT.")
+                elif correo.strip() and not correo_valido(correo.strip()):
+                    st.error(f"El correo `{correo.strip()}` no tiene un formato válido. Revísalo antes de continuar.")
+                else:
+                    caducidad_final = f"{fecha_qr.strftime('%Y-%m-%d')} {hora_qr.strftime('%H:%M')}"
+                    st.session_state.borrador_qr = {
+                        "nombre": nombre.strip(),
+                        "rut": rut.strip(),
+                        "correo": correo.strip(),
+                        "tipo": tipo,
+                        "evento": evento_elegido,
+                        "caducidad": caducidad_final,
+                    }
+                    st.rerun()
+
+            if st.session_state.borrador_qr is not None:
+                b = st.session_state.borrador_qr
+                st.warning("❓ **¿Estás seguro de los datos?** Al confirmar se generará el QR y, si ingresaste correo, se enviará automáticamente.")
+                st.markdown(
+                    f"**• Evento:** {b['evento']}  \n"
+                    f"**• Nombre:** {b['nombre']}  \n"
+                    f"**• RUT:** {b['rut']}  \n"
+                    f"**• Correo:** {b['correo'] or 'Sin correo'}  \n"
+                    f"**• Tipo de Pase:** {b['tipo']}  \n"
+                    f"**• Válido hasta:** {b['caducidad']}"
+                )
+                col_ok, col_cancel = st.columns(2)
+                with col_ok:
+                    if st.button("✅ SÍ, GENERAR Y ENVIAR", type="primary", use_container_width=True):
+                        codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
+                        ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
+                        creador = st.session_state.admin_usuario
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], "DISPONIBLE", ahora_str, "", creador, b["evento"], b["caducidad"])
+                        )
+                        conn.commit()
+                        ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"])
+                        st.session_state["ultimo_qr"] = (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], creador, b["evento"], b["caducidad"])
+                        st.session_state.borrador_qr = None
+
+                        msg_envio = ""
+                        error_envio = ""
+                        if b["correo"]:
+                            ok_mail, detalle_mail = enviar_qr_por_correo(
+                                b["correo"], b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"], codigo_unico, ticket_bytes
+                            )
+                            if ok_mail:
+                                msg_envio = f" | {detalle_mail}"
+                            else:
+                                error_envio = detalle_mail
+
+                        st.success(f"E-Ticket emitido para **{b['nombre']}** (`{codigo_unico}`){msg_envio}")
+                        if error_envio:
+                            st.error(error_envio)
+                        st.rerun()
+                with col_cancel:
+                    if st.button("✏️ CORREGIR DATOS", use_container_width=True):
+                        st.session_state.borrador_qr = None
+                        st.rerun()
 
         ultimo = st.session_state.get("ultimo_qr")
         if isinstance(ultimo, (list, tuple)) and len(ultimo) == 8:
@@ -695,39 +738,13 @@ with tab2:
             st.divider()
             st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor or 'Sin correo'} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
             st.image(ticket_bytes, width=320)
-
-            correo_verificar = st.text_input(
-                "✉️ Verificar correo antes de enviar:",
-                value=cor,
-                key=f"verificar_correo_{cod}"
-            ).strip()
-
-            col_dl, col_mail = st.columns(2)
-            with col_dl:
-                st.download_button(
-                    label="📥 DESCARGAR E-TICKET",
-                    data=ticket_bytes,
-                    file_name=f"ETICKET_KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-            with col_mail:
-                if st.button("📧 ENVIAR E-TICKET POR CORREO", type="primary", use_container_width=True):
-                    if not correo_verificar:
-                        st.error("Debes ingresar un correo electrónico para enviar.")
-                    elif not correo_valido(correo_verificar):
-                        st.warning(f"Revisa el correo `{correo_verificar}`: parece mal escrito (ej: falta un punto o dominio).")
-                    else:
-                        if correo_verificar != cor:
-                            c = conn.cursor()
-                            c.execute("UPDATE entradas SET correo = ? WHERE codigo = ?", (correo_verificar, cod))
-                            conn.commit()
-                            st.session_state["ultimo_qr"] = (cod, nom, rt, correo_verificar, tp, cr, ev, cad)
-                        ok, msg_correo = enviar_qr_por_correo(correo_verificar, nom, rt, tp, ev, cad, cod, ticket_bytes)
-                        if ok:
-                            st.success(msg_correo)
-                        else:
-                            st.error(msg_correo)
+            st.download_button(
+                label="📥 DESCARGAR E-TICKET",
+                data=ticket_bytes,
+                file_name=f"ETICKET_KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
+                mime="image/png",
+                use_container_width=True
+            )
         elif "ultimo_qr" in st.session_state:
             del st.session_state["ultimo_qr"]
 

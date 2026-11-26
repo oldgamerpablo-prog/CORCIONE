@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
 
+USUARIOS_PRODUCCION_CONOCIDOS = {"Javi.martinez", "Eric.brito", "Piero.corci"}
+
 # --- HORA LOCAL CHILE ---
 def ahora_chile():
     try:
@@ -30,6 +32,15 @@ def limpiar_nombre_archivo(texto):
 
 def correo_valido(correo):
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", str(correo).strip()))
+
+def parece_fecha_hora(valor):
+    texto = str(valor or "").strip()
+    if not texto:
+        return False
+    return bool(
+        re.match(r"^\d{4}-\d{2}-\d{2}(\s+\d{1,2}:\d{2}(:\d{2})?)?$", texto)
+        or re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}(\s+\d{1,2}:\d{2}(:\d{2})?)?$", texto)
+    )
 
 def parsear_fecha_excel(valor, fecha_defecto):
     if valor is None or str(valor).strip() == "" or pd.isna(valor):
@@ -67,10 +78,61 @@ def parsear_hora_excel(valor, hora_defecto):
         return dt_parsed.time().replace(second=0, microsecond=0)
     return hora_defecto
 
+def normalizar_dataframe_por_encabezado(df_in):
+    alias_encabezados = {
+        "codigo": "codigo",
+        "id": "codigo",
+        "nombre": "nombre",
+        "nombre_completo": "nombre",
+        "asistente": "nombre",
+        "rut": "rut",
+        "carnet": "rut",
+        "dni": "rut",
+        "tipo": "tipo",
+        "tipo_de_pase": "tipo",
+        "tipo_pase": "tipo",
+        "pase": "tipo",
+        "estado": "estado",
+        "fecha_creacion": "fecha_creacion",
+        "creacion": "fecha_creacion",
+        "fecha_ingreso": "fecha_ingreso",
+        "ingreso": "fecha_ingreso",
+        "creado_por": "creado_por",
+        "productor": "creado_por",
+        "evento": "evento",
+        "nombre_del_evento": "evento",
+        "nombre_evento": "evento",
+        "caducidad": "caducidad",
+        "fecha_caducidad": "caducidad",
+        "correo": "correo",
+        "email": "correo",
+        "correo_electronico": "correo",
+        "nota_renominacion": "nota_renominacion",
+        "renominacion": "nota_renominacion",
+    }
+    renombres = {}
+    for col in df_in.columns:
+        clave = re.sub(r"[^a-z0-9]+", "_", str(col).strip().lower()).strip("_")
+        if clave in alias_encabezados:
+            renombres[col] = alias_encabezados[clave]
+    df_mapeado = df_in.rename(columns=renombres).copy()
+
+    columnas_esperadas = [
+        "codigo", "nombre", "rut", "tipo", "estado",
+        "fecha_creacion", "fecha_ingreso", "creado_por",
+        "evento", "caducidad", "correo", "nota_renominacion"
+    ]
+    for col_esp in columnas_esperadas:
+        if col_esp not in df_mapeado.columns:
+            df_mapeado[col_esp] = ""
+
+    return df_mapeado[columnas_esperadas].fillna("")
+
 def generar_excel_bytes(df_data):
+    df_ordenado = normalizar_dataframe_por_encabezado(df_data)
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df_data.to_excel(writer, index=False, sheet_name="Entradas")
+        df_ordenado.to_excel(writer, index=False, sheet_name="Entradas")
     return buf.getvalue()
 
 def cargar_fuente(tamano, bold=False):
@@ -578,6 +640,45 @@ if "borrador_qr" not in st.session_state:
 if "borrador_masivo" not in st.session_state:
     st.session_state.borrador_masivo = None
 
+def reparar_filas_desplazadas(conn):
+    c = conn.cursor()
+    c.execute("SELECT rowid, codigo, correo, creado_por, evento, caducidad FROM entradas")
+    filas = c.fetchall()
+    cambios = 0
+    for rowid, codigo, correo, creado_por, evento, caducidad in filas:
+        cor_s = str(correo or "").strip()
+        prod_s = str(creado_por or "").strip()
+        ev_s = str(evento or "").strip()
+        cad_s = str(caducidad or "").strip()
+
+        nuevo_cor = cor_s
+        nuevo_prod = prod_s
+        nuevo_ev = ev_s
+        nuevo_cad = cad_s
+
+        if parece_fecha_hora(cor_s) and not parece_fecha_hora(cad_s):
+            nuevo_cad = cor_s
+            nuevo_cor = ""
+        if parece_fecha_hora(cad_s) and parece_fecha_hora(cor_s):
+            nuevo_cor = ""
+        if ev_s in USUARIOS_PRODUCCION_CONOCIDOS:
+            if not nuevo_prod:
+                nuevo_prod = ev_s
+            if cad_s and not parece_fecha_hora(cad_s):
+                nuevo_ev = cad_s
+                nuevo_cad = ""
+            else:
+                nuevo_ev = ""
+
+        if (nuevo_cor, nuevo_prod, nuevo_ev, nuevo_cad) != (cor_s, prod_s, ev_s, cad_s):
+            c.execute(
+                "UPDATE entradas SET correo = ?, creado_por = ?, evento = ?, caducidad = ? WHERE rowid = ?",
+                (nuevo_cor, nuevo_prod, nuevo_ev, nuevo_cad, rowid)
+            )
+            cambios += 1
+    if cambios:
+        conn.commit()
+
 # --- BASE DE DATOS LOCAL (SQLite) ---
 def init_db():
     conn = sqlite3.connect("entradas.db", check_same_thread=False)
@@ -617,6 +718,7 @@ def init_db():
     if "nota_renominacion" not in columnas:
         c.execute("ALTER TABLE entradas ADD COLUMN nota_renominacion TEXT DEFAULT ''")
     conn.commit()
+    reparar_filas_desplazadas(conn)
     return conn
 
 conn = init_db()
@@ -1083,11 +1185,10 @@ elif st.session_state.rol_sesion == "admin":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
         st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos manteniendo el mismo QR y el folio correlativo (REN-001).")
 
+        reparar_filas_desplazadas(conn)
         eventos_dict_ren = obtener_eventos()
-        df_ren = pd.read_sql_query(
-            "SELECT codigo, nombre, rut, correo, tipo, estado, evento, caducidad, nota_renominacion FROM entradas ORDER BY fecha_creacion DESC",
-            conn
-        )
+        df_ren_raw = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
+        df_ren = normalizar_dataframe_por_encabezado(df_ren_raw)
 
         if df_ren.empty:
             st.info("No hay entradas registradas aún para renombrar.")
@@ -1114,8 +1215,9 @@ elif st.session_state.rol_sesion == "admin":
             if df_filtrado_ren.empty:
                 st.warning("No se encontraron entradas con ese criterio de búsqueda o evento.")
             else:
+                st.caption(f"Entradas encontradas: {len(df_filtrado_ren)}")
                 opciones_ren = [
-                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento'] or 'Sin evento'} [{r['estado']}]"
+                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento'] or 'Sin evento'} [{r['estado'] or 'DISPONIBLE'}]"
                     for _, r in df_filtrado_ren.iterrows()
                 ]
                 seleccion_ren = st.selectbox("Selecciona la entrada a renombrar:", opciones_ren)
@@ -1197,7 +1299,9 @@ elif st.session_state.rol_sesion == "admin":
                             st.rerun()
 
     elif st.session_state.vista_admin == "lista":
-        df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
+        reparar_filas_desplazadas(conn)
+        df_raw = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
+        df = normalizar_dataframe_por_encabezado(df_raw)
 
         col_f1, col_f2 = st.columns([1.2, 1.8])
         with col_f1:
@@ -1246,23 +1350,24 @@ elif st.session_state.rol_sesion == "admin":
         if archivo_subido is not None:
             if st.button("📤 CARGAR ENTRADAS DEL ARCHIVO", type="primary", use_container_width=True):
                 if archivo_subido.name.lower().endswith(".xlsx"):
-                    df_nuevo = pd.read_excel(archivo_subido).fillna("")
+                    df_nuevo_raw = pd.read_excel(archivo_subido)
                 else:
-                    df_nuevo = pd.read_csv(archivo_subido).fillna("")
+                    df_nuevo_raw = pd.read_csv(archivo_subido)
+                df_nuevo = normalizar_dataframe_por_encabezado(df_nuevo_raw)
                 c = conn.cursor()
                 for _, row in df_nuevo.iterrows():
-                    correo_csv = row["correo"] if "correo" in df_nuevo.columns else ""
-                    creador_csv = row["creado_por"] if "creado_por" in df_nuevo.columns else ""
-                    evento_csv = row["evento"] if "evento" in df_nuevo.columns else ""
-                    cad_csv = row["caducidad"] if "caducidad" in df_nuevo.columns else ""
-                    nota_csv = row["nota_renominacion"] if "nota_renominacion" in df_nuevo.columns else ""
                     c.execute(
                         "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (row["codigo"], row["nombre"], row["rut"], correo_csv, row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv, evento_csv, cad_csv, nota_csv)
+                        (
+                            row["codigo"], row["nombre"], row["rut"], row["correo"],
+                            row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"],
+                            row["creado_por"], row["evento"], row["caducidad"], row["nota_renominacion"]
+                        )
                     )
-                    if evento_csv:
-                        c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (evento_csv, cad_csv))
+                    if row["evento"]:
+                        c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (row["evento"], row["caducidad"]))
                 conn.commit()
+                reparar_filas_desplazadas(conn)
                 st.success("Base de datos restaurada correctamente.")
                 st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)

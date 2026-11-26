@@ -11,14 +11,24 @@ from datetime import datetime
 st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
 
 # ==========================================
-# 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (DARK NEON)
+# 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (ALTO CONTRASTE)
 # ==========================================
 st.markdown("""
 <style>
     /* Fondo general oscuro */
     .stApp {
         background: radial-gradient(circle at top, #1a1025 0%, #09090b 65%);
-        color: #f4f4f5;
+        color: #ffffff !important;
+    }
+    /* Forzar visibilidad de textos, etiquetas y opciones */
+    .stApp p, .stApp label, [data-testid="stWidgetLabel"] p,
+    [data-testid="stRadio"] p, [data-testid="stCaptionContainer"] p,
+    [data-testid="stMetricLabel"] p {
+        color: #f4f4f5 !important;
+    }
+    [data-testid="stWidgetLabel"] p {
+        font-weight: 600 !important;
+        letter-spacing: 0.5px;
     }
     /* Títulos con estilo club/electrónica */
     h1, h2, h3 {
@@ -29,8 +39,10 @@ st.markdown("""
     h1 {
         text-shadow: 0 0 12px rgba(168, 85, 247, 0.7);
     }
-    /* Botones principales con degradado neón */
-    .stButton > button[kind="primary"], .stFormSubmitButton > button {
+    /* Botones principales y botón de cámara (Take Photo) */
+    .stButton > button[kind="primary"],
+    .stFormSubmitButton > button,
+    [data-testid="stCameraInputButton"] {
         background: linear-gradient(90deg, #9333ea 0%, #06b6d4 100%) !important;
         color: #ffffff !important;
         border: none !important;
@@ -41,41 +53,45 @@ st.markdown("""
         box-shadow: 0 0 15px rgba(147, 51, 234, 0.4);
         transition: all 0.2s ease-in-out;
     }
-    .stButton > button[kind="primary"]:hover, .stFormSubmitButton > button:hover {
+    .stButton > button[kind="primary"]:hover,
+    .stFormSubmitButton > button:hover,
+    [data-testid="stCameraInputButton"]:hover {
         box-shadow: 0 0 22px rgba(6, 182, 212, 0.75);
         transform: scale(1.01);
     }
     /* Botones secundarios */
     .stButton > button, .stDownloadButton > button {
         background-color: #18181b !important;
-        color: #e4e4e7 !important;
-        border: 1px solid #3f3f46 !important;
+        color: #ffffff !important;
+        border: 1px solid #52525b !important;
         border-radius: 8px !important;
     }
     /* Inputs y formularios */
     .stTextInput > div > div > input, .stSelectbox > div > div {
-        background-color: #121217 !important;
+        background-color: #18181b !important;
         color: #ffffff !important;
-        border: 1px solid #3b0764 !important;
+        border: 1px solid #7e22ce !important;
         border-radius: 8px !important;
     }
-    /* Pestañas */
+    /* Pestañas (activas e inactivas bien visibles) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background-color: #121217;
         padding: 6px;
         border-radius: 10px;
-        border: 1px solid #27272a;
+        border: 1px solid #3f3f46;
     }
-    .stTabs [data-baseweb="tab"] {
-        color: #a1a1aa !important;
-        border-radius: 6px;
-        font-weight: 600;
+    .stTabs [data-baseweb="tab"] p {
+        color: #d4d4d8 !important;
+        font-weight: 600 !important;
     }
     .stTabs [aria-selected="true"] {
         background-color: #2e1065 !important;
-        color: #22d3ee !important;
         border: 1px solid #9333ea !important;
+        border-radius: 6px;
+    }
+    .stTabs [aria-selected="true"] p {
+        color: #22d3ee !important;
     }
     /* Tarjeta de pase válido */
     .ticket-card {
@@ -120,7 +136,7 @@ if "admin_usuario" not in st.session_state:
 # ==========================================
 if not st.session_state.autenticado:
     st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #22d3ee; letter-spacing: 3px; font-size: 14px;'>ELECTRONIC MUSIC // ACCESS CONTROL</p>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #22d3ee !important; letter-spacing: 3px; font-size: 14px;'>ELECTRONIC MUSIC // ACCESS CONTROL</p>", unsafe_allow_html=True)
     st.divider()
 
     with st.form("form_login"):
@@ -240,11 +256,11 @@ with tab1:
             else:
                 st.markdown(f"""
                 <div class="ticket-card">
-                    <p style="color:#22d3ee; font-weight:bold; margin:0; letter-spacing:2px;">✅ ACCESO VÁLIDO — VERIFICAR CARNET</p>
+                    <p style="color:#22d3ee !important; font-weight:bold; margin:0; letter-spacing:2px;">✅ ACCESO VÁLIDO — VERIFICAR CARNET</p>
                     <h2 style="margin:8px 0 4px 0;">👤 {nombre}</h2>
                     <h3 style="color:#a855f7 !important; margin:0 0 12px 0;">🪪 RUT: {rut}</h3>
                     <p style="margin:0; font-size:14px;"><b>🎟️ PASE:</b> {tipo} &nbsp;|&nbsp; <b>🔑 ID:</b> {cod}</p>
-                    <p style="margin:4px 0 0 0; font-size:12px; color:#a1a1aa;">Generado por: {creado_por if creado_por else 'Sin registro'}</p>
+                    <p style="margin:4px 0 0 0; font-size:12px; color:#d4d4d8 !important;">Generado por: {creado_por if creado_por else 'Sin registro'}</p>
                 </div>
                 """, unsafe_allow_html=True)
 

@@ -3,6 +3,8 @@ import sqlite3
 import uuid
 import os
 import re
+import smtplib
+from email.message import EmailMessage
 import pandas as pd
 import qrcode
 import zxingcpp
@@ -29,6 +31,39 @@ def generar_excel_bytes(df_data):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df_data.to_excel(writer, index=False, sheet_name="Entradas")
     return buf.getvalue()
+
+def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, qr_bytes):
+    remitente = st.secrets.get("SMTP_EMAIL", "")
+    clave_app = st.secrets.get("SMTP_APP_PASSWORD", "")
+    if not remitente or not clave_app:
+        return False, "Falta configurar SMTP_EMAIL y SMTP_APP_PASSWORD en Streamlit Secrets."
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Tu entrada QR - {evento} ({codigo})"
+    msg["From"] = remitente
+    msg["To"] = destinatario
+    msg.set_content(
+        f"Hola {nombre},\n\n"
+        f"Aquí tienes tu código QR de acceso para {evento}.\n\n"
+        f"• Nombre: {nombre}\n"
+        f"• RUT: {rut}\n"
+        f"• Tipo de pase: {tipo}\n"
+        f"• Código: {codigo}\n"
+        f"• Válido hasta: {caducidad}\n\n"
+        f"Presenta este QR y tu carnet en la puerta.\n"
+        f"Colectivo Kalma"
+    )
+    msg.add_attachment(
+        qr_bytes,
+        maintype="image",
+        subtype="png",
+        filename=f"KALMA_{limpiar_nombre_archivo(evento)}_{codigo}.png"
+    )
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(remitente, clave_app)
+        smtp.send_message(msg)
+    return True, f"QR enviado a {destinatario}."
 
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
@@ -491,13 +526,29 @@ with tab2:
             st.divider()
             st.write(f"**Último E-Ticket:** {nom} ({rt}) — {cor or 'Sin correo'} | **{ev}** ({tp}) | *Válido hasta: {cad}*")
             st.image(qr_bytes, width=250)
-            st.download_button(
-                label="📥 DESCARGAR QR PARA ENVIAR",
-                data=qr_bytes,
-                file_name=f"KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
-                mime="image/png",
-                use_container_width=True
-            )
+
+            col_dl, col_mail = st.columns(2)
+            with col_dl:
+                st.download_button(
+                    label="📥 DESCARGAR QR",
+                    data=qr_bytes,
+                    file_name=f"KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+            with col_mail:
+                if st.button("📧 ENVIAR QR POR CORREO", type="primary", use_container_width=True):
+                    if not cor.strip():
+                        st.error("Esta entrada no tiene correo electrónico registrado.")
+                    else:
+                        try:
+                            ok, msg_correo = enviar_qr_por_correo(cor.strip(), nom, rt, tp, ev, cad, cod, qr_bytes)
+                            if ok:
+                                st.success(msg_correo)
+                            else:
+                                st.error(msg_correo)
+                        except Exception as exc:
+                            st.error(f"No se pudo enviar el correo: {exc}")
         elif "ultimo_qr" in st.session_state:
             del st.session_state["ultimo_qr"]
 

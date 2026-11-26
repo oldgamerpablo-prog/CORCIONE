@@ -8,17 +8,16 @@ from PIL import Image
 from io import BytesIO
 from datetime import datetime
 
-st.set_page_config(page_title="Control de Entradas QR", page_icon="🎵", layout="centered")
+st.set_page_config(page_title="Colectivo Kalma - Control QR", page_icon="🎵", layout="centered")
 
 # ==========================================
 # 🔐 CONFIGURACIÓN DE USUARIOS Y CONTRASEÑAS
-# (Cambia estos valores por los tuyos)
 # ==========================================
 USUARIOS_ACCESO = {
-    "puerta": "1234",      # Usuario para el equipo de escaneo
-    "admin": "admin123"    # Tu usuario principal
+    "Colectivo.Kalma": "Kalma.0720",
+    "puerta": "1234"
 }
-CLAVE_ADMIN = "jefe2026"   # Contraseña extra para desbloquear Pestañas 2 y 3
+CLAVE_ADMIN = "Kalma.0720"  # Contraseña para desbloquear Pestañas 2 y 3
 
 # --- ESTADOS DE SESIÓN ---
 if "autenticado" not in st.session_state:
@@ -32,7 +31,7 @@ if "admin_desbloqueado" not in st.session_state:
 # 🚪 PORTADA DE INICIO DE SESIÓN
 # ==========================================
 if not st.session_state.autenticado:
-    st.title("🎵 Control de Acceso - Evento")
+    st.title("🎵 Colectivo Kalma - Control de Acceso")
     st.subheader("🔐 Iniciar Sesión")
 
     with st.form("form_login"):
@@ -48,7 +47,7 @@ if not st.session_state.autenticado:
             else:
                 st.error("Usuario o contraseña incorrectos.")
 
-    st.stop()  # Detiene la carga del resto de la página hasta que inicie sesión
+    st.stop()
 
 # --- BASE DE DATOS LOCAL (SQLite) ---
 def init_db():
@@ -80,7 +79,7 @@ def generar_imagen_qr(texto):
     return buf.getvalue()
 
 def pedir_clave_admin(id_pestana):
-    """Muestra el candado en las pestañas 2 y 3 si aún no se ingresa la clave admin."""
+    """Bloquea las pestañas 2 y 3 hasta ingresar la clave de administrador."""
     if st.session_state.admin_desbloqueado:
         return True
 
@@ -99,7 +98,7 @@ def pedir_clave_admin(id_pestana):
 # --- BARRA SUPERIOR ---
 col_tit, col_salir = st.columns([3, 1])
 with col_tit:
-    st.title("🎵 Control de Acceso")
+    st.title("🎵 Colectivo Kalma")
 with col_salir:
     st.write("")
     if st.button("Cerrar sesión", use_container_width=True):
@@ -113,7 +112,7 @@ st.caption(f"Sesión activa: **{st.session_state.usuario_actual}**")
 tab1, tab2, tab3 = st.tabs(["📷 Validar en Puerta", "🔒 Generar Entrada", "🔒 Lista y Respaldo"])
 
 # ==========================================
-# PESTAÑA 1: VALIDAR EN PUERTA (ACCESO LIBRE TRAS LOGIN)
+# PESTAÑA 1: VALIDAR EN PUERTA
 # ==========================================
 with tab1:
     st.subheader("Escáner de Puerta")
@@ -173,7 +172,7 @@ with tab2:
 
         if crear:
             if nombre.strip() and rut.strip():
-                codigo_unico = f"EVT-{uuid.uuid4().hex[:8].upper()}"
+                codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                 ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 c = conn.cursor()
                 c.execute(

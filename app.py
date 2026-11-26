@@ -20,6 +20,16 @@ def ahora_chile():
     except Exception:
         return datetime.now()
 
+def limpiar_nombre_archivo(texto):
+    limpio = re.sub(r"[^A-Za-z0-9_-]+", "_", texto.strip())
+    return limpio.strip("_") or "evento"
+
+def generar_excel_bytes(df_data):
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df_data.to_excel(writer, index=False, sheet_name="Entradas")
+    return buf.getvalue()
+
 # ==========================================
 # 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (VIOLETA Y CIAN)
 # ==========================================
@@ -484,7 +494,7 @@ with tab2:
             st.download_button(
                 label="📥 DESCARGAR QR PARA ENVIAR",
                 data=qr_bytes,
-                file_name=f"KALMA_{ev.replace(' ', '_')}_{nom.replace(' ', '_')}_{cod}.png",
+                file_name=f"KALMA_{limpiar_nombre_archivo(ev)}_{limpiar_nombre_archivo(nom)}_{cod}.png",
                 mime="image/png",
                 use_container_width=True
             )
@@ -525,27 +535,30 @@ with tab3:
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
 
         st.divider()
-        nombre_etiqueta = "todos_eventos" if filtro_ev == "Todos" else re.sub(r"[^A-Za-z0-9_-]+", "_", filtro_ev.strip())
+        nombre_etiqueta = "todos_eventos" if filtro_ev == "Todos" else limpiar_nombre_archivo(filtro_ev)
         etiqueta_visible = "TODOS LOS EVENTOS" if filtro_ev == "Todos" else filtro_ev
 
-        st.markdown("### 💾 HISTORIAL Y RESPALDO CSV")
+        st.markdown("### 📊 HISTORIAL EXCEL Y RESPALDO")
         st.markdown('<div class="backup-box">', unsafe_allow_html=True)
-        st.markdown(f"**1. Descargar historial ({etiqueta_visible})**")
-        csv = df_mostrar.to_csv(index=False).encode("utf-8-sig")
+        st.markdown(f"**1. Descargar Excel ({etiqueta_visible})**")
+        excel_bytes = generar_excel_bytes(df_mostrar)
         st.download_button(
-            f"📥 DESCARGAR CSV — {etiqueta_visible}",
-            data=csv,
-            file_name=f"kalma_{nombre_etiqueta}_{ahora_chile().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv",
+            f"📥 DESCARGAR EXCEL (.XLSX) — {etiqueta_visible}",
+            data=excel_bytes,
+            file_name=f"kalma_{nombre_etiqueta}_{ahora_chile().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
 
         st.divider()
-        st.markdown("**2. Restaurar registros desde CSV**")
-        archivo_subido = st.file_uploader("Selecciona un archivo CSV de respaldo", type=["csv"], label_visibility="collapsed")
+        st.markdown("**2. Restaurar registros desde Excel (.xlsx) o CSV**")
+        archivo_subido = st.file_uploader("Selecciona un archivo de respaldo", type=["xlsx", "csv"], label_visibility="collapsed")
         if archivo_subido is not None:
             if st.button("📤 CARGAR ENTRADAS DEL ARCHIVO", type="primary", use_container_width=True):
-                df_nuevo = pd.read_csv(archivo_subido).fillna("")
+                if archivo_subido.name.lower().endswith(".xlsx"):
+                    df_nuevo = pd.read_excel(archivo_subido).fillna("")
+                else:
+                    df_nuevo = pd.read_csv(archivo_subido).fillna("")
                 c = conn.cursor()
                 for _, row in df_nuevo.iterrows():
                     correo_csv = row["correo"] if "correo" in df_nuevo.columns else ""

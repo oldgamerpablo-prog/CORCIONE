@@ -2,6 +2,7 @@ import streamlit as st
 import sqlite3
 import uuid
 import os
+import re
 import pandas as pd
 import qrcode
 import zxingcpp
@@ -96,7 +97,6 @@ st.markdown("""
         border: 1px solid #7e22ce !important;
         border-radius: 8px !important;
     }
-    /* Selectbox: texto visible, fondo oscuro y menú desplegable legible */
     .stSelectbox [data-baseweb="select"] > div {
         background-color: #18181b !important;
         color: #ffffff !important;
@@ -491,12 +491,14 @@ with tab3:
         st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
 
         st.divider()
-        st.markdown("**💾 BACKUP DE SEGURIDAD** *(Descarga siempre tu lista antes de abrir puertas)*")
-        csv = df.to_csv(index=False).encode("utf-8-sig")
+        nombre_etiqueta = "todos_eventos" if filtro_ev == "Todos" else re.sub(r"[^A-Za-z0-9_-]+", "_", filtro_ev.strip())
+        etiqueta_visible = "TODOS LOS EVENTOS" if filtro_ev == "Todos" else filtro_ev
+        st.markdown(f"**💾 DESCARGA DEL HISTORIAL — {etiqueta_visible}** *(Exporta lo filtrado actualmente en pantalla)*")
+        csv = df_mostrar.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            "📥 DESCARGAR BASE DE DATOS (CSV)",
+            f"📥 DESCARGAR HISTORIAL ({etiqueta_visible})",
             data=csv,
-            file_name=f"kalma_respaldo_{ahora_chile().strftime('%Y%m%d_%H%M')}.csv",
+            file_name=f"kalma_{nombre_etiqueta}_{ahora_chile().strftime('%Y%m%d_%H%M')}.csv",
             mime="text/csv",
             use_container_width=True
         )

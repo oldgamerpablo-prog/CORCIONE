@@ -1081,7 +1081,7 @@ elif st.session_state.rol_sesion == "admin":
 
     elif st.session_state.vista_admin == "renominar":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
-        st.caption("Filtra por un evento generado, ubica el ticket y actualiza los datos manteniendo el mismo QR y el folio correlativo (REN-001).")
+        st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos manteniendo el mismo QR y el folio correlativo (REN-001).")
 
         eventos_dict_ren = obtener_eventos()
         df_ren = pd.read_sql_query(
@@ -1094,106 +1094,107 @@ elif st.session_state.rol_sesion == "admin":
         else:
             eventos_generados = sorted(list(eventos_dict_ren.keys()))
             eventos_en_entradas = sorted([str(e).strip() for e in df_ren["evento"].dropna().unique() if str(e).strip() != ""])
-            opciones_evento_filtro = eventos_generados if eventos_generados else eventos_en_entradas
+            eventos_unicos = sorted(list(set(eventos_generados + eventos_en_entradas)))
+            opciones_evento_filtro = ["Todos los eventos"] + eventos_unicos
 
-            if not opciones_evento_filtro:
-                st.warning("No hay eventos generados disponibles para filtrar.")
+            evento_filtro_sel = st.selectbox("🎧 Filtrar por evento (opcional):", opciones_evento_filtro, key="sel_evento_filtro_ren")
+            filtro_ren = st.text_input("🔍 Buscar por código, RUT, nombre o evento:").strip()
+
+            df_filtrado_ren = df_ren.copy()
+            if evento_filtro_sel != "Todos los eventos":
+                df_filtrado_ren = df_filtrado_ren[df_filtrado_ren["evento"] == evento_filtro_sel]
+            if filtro_ren:
+                df_filtrado_ren = df_filtrado_ren[
+                    df_filtrado_ren["codigo"].str.contains(filtro_ren, case=False, na=False) |
+                    df_filtrado_ren["rut"].str.contains(filtro_ren, case=False, na=False) |
+                    df_filtrado_ren["nombre"].str.contains(filtro_ren, case=False, na=False) |
+                    df_filtrado_ren["evento"].str.contains(filtro_ren, case=False, na=False)
+                ]
+
+            if df_filtrado_ren.empty:
+                st.warning("No se encontraron entradas con ese criterio de búsqueda o evento.")
             else:
-                evento_filtro_exacto = st.selectbox("🎧 Filtrar por evento generado:", opciones_evento_filtro, key="sel_evento_filtro_ren")
-                filtro_ren = st.text_input("🔍 Buscar por código, RUT o nombre actual dentro del evento:").strip()
+                opciones_ren = [
+                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento'] or 'Sin evento'} [{r['estado']}]"
+                    for _, r in df_filtrado_ren.iterrows()
+                ]
+                seleccion_ren = st.selectbox("Selecciona la entrada a renombrar:", opciones_ren)
+                codigo_sel = seleccion_ren.split(" — ", 1)[0].strip()
+                fila_actual = df_ren[df_ren["codigo"] == codigo_sel].iloc[0]
 
-                df_filtrado_ren = df_ren[df_ren["evento"] == evento_filtro_exacto].copy()
-                if filtro_ren:
-                    df_filtrado_ren = df_filtrado_ren[
-                        df_filtrado_ren["codigo"].str.contains(filtro_ren, case=False, na=False) |
-                        df_filtrado_ren["rut"].str.contains(filtro_ren, case=False, na=False) |
-                        df_filtrado_ren["nombre"].str.contains(filtro_ren, case=False, na=False)
-                    ]
+                evento_ticket = str(fila_actual["evento"] or "").strip()
+                caducidad_ticket = str(fila_actual["caducidad"] or eventos_dict_ren.get(evento_ticket, "")).strip()
+                evento_pasado, ref_cad = fecha_caducidad_pasada(caducidad_ticket, eventos_dict_ren, evento_ticket)
 
-                if df_filtrado_ren.empty:
-                    st.warning(f"No hay entradas registradas para el evento **{evento_filtro_exacto}** con ese filtro.")
-                else:
-                    opciones_ren = [
-                        f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['tipo']} [{r['estado']}]"
-                        for _, r in df_filtrado_ren.iterrows()
-                    ]
-                    seleccion_ren = st.selectbox("Selecciona la entrada a renombrar:", opciones_ren)
-                    codigo_sel = seleccion_ren.split(" — ", 1)[0].strip()
-                    fila_actual = df_ren[df_ren["codigo"] == codigo_sel].iloc[0]
+                st.markdown(
+                    f"**Evento:** {evento_ticket or 'Sin evento'} | **Caducidad:** {ref_cad or 'Sin límite'}  \n"
+                    f"**Titular actual:** {fila_actual['nombre']} | **RUT:** {fila_actual['rut']} | "
+                    f"**Correo:** {fila_actual['correo'] or 'Sin correo'} | **Pase:** {fila_actual['tipo']}"
+                )
+                if fila_actual["nota_renominacion"]:
+                    st.caption(f"📝 Historial anterior: {fila_actual['nota_renominacion']}")
 
-                    evento_ticket = str(fila_actual["evento"] or evento_filtro_exacto).strip()
-                    caducidad_ticket = str(fila_actual["caducidad"] or eventos_dict_ren.get(evento_ticket, "")).strip()
-                    evento_pasado, ref_cad = fecha_caducidad_pasada(caducidad_ticket, eventos_dict_ren, evento_ticket)
-
-                    st.markdown(
-                        f"**Evento:** {evento_ticket} | **Caducidad:** {ref_cad or 'Sin límite'}  \n"
-                        f"**Titular actual:** {fila_actual['nombre']} | **RUT:** {fila_actual['rut']} | "
-                        f"**Correo:** {fila_actual['correo'] or 'Sin correo'} | **Pase:** {fila_actual['tipo']}"
+                if evento_pasado:
+                    st.error(
+                        f"⛔ **Renominación bloqueada:** El evento **{evento_ticket or 'registrado'}** ya pasó de la fecha/hora límite (`{ref_cad}`). "
+                        f"No se pueden generar renominaciones para eventos ya pasados."
                     )
-                    if fila_actual["nota_renominacion"]:
-                        st.caption(f"📝 Historial anterior: {fila_actual['nota_renominacion']}")
+                else:
+                    if fila_actual["estado"] == "USADA":
+                        st.warning("⚠️ Esta entrada ya figura como **USADA** en puerta.")
 
-                    if evento_pasado:
-                        st.error(
-                            f"⛔ **Renominación bloqueada:** El evento **{evento_ticket}** ya pasó de la fecha/hora límite (`{ref_cad}`). "
-                            f"No se pueden generar renominaciones para eventos ya pasados."
-                        )
-                    else:
-                        if fila_actual["estado"] == "USADA":
-                            st.warning("⚠️ Esta entrada ya figura como **USADA** en puerta.")
+                    tipos_pase = ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"]
+                    idx_tipo = tipos_pase.index(fila_actual["tipo"]) if fila_actual["tipo"] in tipos_pase else 3
 
-                        tipos_pase = ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"]
-                        idx_tipo = tipos_pase.index(fila_actual["tipo"]) if fila_actual["tipo"] in tipos_pase else 3
+                    with st.form("form_renominar"):
+                        nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]))
+                        nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]))
+                        nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
+                        nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo)
+                        motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"])
+                        detalle_ren = st.text_input("Observación adicional (opcional)", placeholder="Ej: Solicitado por correo")
+                        guardar_ren = st.form_submit_button("💾 GUARDAR RENOMINACIÓN", type="primary", use_container_width=True)
 
-                        with st.form("form_renominar"):
-                            nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]))
-                            nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]))
-                            nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
-                            nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo)
-                            motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"])
-                            detalle_ren = st.text_input("Observación adicional (opcional)", placeholder="Ej: Solicitado por correo")
-                            guardar_ren = st.form_submit_button("💾 GUARDAR RENOMINACIÓN", type="primary", use_container_width=True)
-
-                        if guardar_ren:
-                            evento_vencido_ahora, ref_cad_ahora = fecha_caducidad_pasada(caducidad_ticket, eventos_dict_ren, evento_ticket)
-                            if evento_vencido_ahora:
-                                st.error(f"⛔ Este evento ya pasó (`{ref_cad_ahora}`). No se puede guardar la renominación.")
-                            elif not nuevo_nombre.strip() or not nuevo_rut.strip():
-                                st.error("Debes completar el Nombre y el RUT del nuevo asistente.")
-                            elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
-                                st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
-                            else:
-                                codigo_ren = siguiente_codigo_ren(conn)
-                                fecha_ren = ahora_chile().strftime("%d/%m/%Y %H:%M")
-                                anterior_txt = (
-                                    f"ANTERIOR [{codigo_ren}]: {fila_actual['nombre']} | RUT: {fila_actual['rut']} | "
-                                    f"Correo: {fila_actual['correo'] or 'Sin correo'} | Pase: {fila_actual['tipo']}"
-                                )
-                                nuevo_txt = (
-                                    f"NUEVO [{codigo_ren}]: {nuevo_nombre.strip()} | RUT: {nuevo_rut.strip()} | "
-                                    f"Correo: {nuevo_correo.strip() or 'Sin correo'} | Pase: {nuevo_tipo}"
-                                )
-                                marca_cambio = (
-                                    f"[{codigo_ren} - RENOMINADA] {fecha_ren} | Evento: '{evento_ticket}' | Motivo: {motivo_ren} | "
-                                    f"{anterior_txt} ==> {nuevo_txt} | Por: {st.session_state.usuario_actual}"
-                                )
-                                if detalle_ren.strip():
-                                    marca_cambio += f" | Obs: {detalle_ren.strip()}"
-                                nota_acumulada = (
-                                    f"{fila_actual['nota_renominacion']} || {marca_cambio}"
-                                    if fila_actual["nota_renominacion"]
-                                    else marca_cambio
-                                )
-                                c = conn.cursor()
-                                c.execute(
-                                    "UPDATE entradas SET nombre = ?, rut = ?, correo = ?, tipo = ?, nota_renominacion = ? WHERE codigo = ?",
-                                    (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
-                                )
-                                conn.commit()
-                                st.success(
-                                    f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{evento_ticket}**."
-                                )
-                                st.rerun()
+                    if guardar_ren:
+                        evento_vencido_ahora, ref_cad_ahora = fecha_caducidad_pasada(caducidad_ticket, eventos_dict_ren, evento_ticket)
+                        if evento_vencido_ahora:
+                            st.error(f"⛔ Este evento ya pasó (`{ref_cad_ahora}`). No se puede guardar la renominación.")
+                        elif not nuevo_nombre.strip() or not nuevo_rut.strip():
+                            st.error("Debes completar el Nombre y el RUT del nuevo asistente.")
+                        elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
+                            st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
+                        else:
+                            codigo_ren = siguiente_codigo_ren(conn)
+                            fecha_ren = ahora_chile().strftime("%d/%m/%Y %H:%M")
+                            anterior_txt = (
+                                f"ANTERIOR [{codigo_ren}]: {fila_actual['nombre']} | RUT: {fila_actual['rut']} | "
+                                f"Correo: {fila_actual['correo'] or 'Sin correo'} | Pase: {fila_actual['tipo']}"
+                            )
+                            nuevo_txt = (
+                                f"NUEVO [{codigo_ren}]: {nuevo_nombre.strip()} | RUT: {nuevo_rut.strip()} | "
+                                f"Correo: {nuevo_correo.strip() or 'Sin correo'} | Pase: {nuevo_tipo}"
+                            )
+                            marca_cambio = (
+                                f"[{codigo_ren} - RENOMINADA] {fecha_ren} | Evento: '{evento_ticket}' | Motivo: {motivo_ren} | "
+                                f"{anterior_txt} ==> {nuevo_txt} | Por: {st.session_state.usuario_actual}"
+                            )
+                            if detalle_ren.strip():
+                                marca_cambio += f" | Obs: {detalle_ren.strip()}"
+                            nota_acumulada = (
+                                f"{fila_actual['nota_renominacion']} || {marca_cambio}"
+                                if fila_actual["nota_renominacion"]
+                                else marca_cambio
+                            )
+                            c = conn.cursor()
+                            c.execute(
+                                "UPDATE entradas SET nombre = ?, rut = ?, correo = ?, tipo = ?, nota_renominacion = ? WHERE codigo = ?",
+                                (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
+                            )
+                            conn.commit()
+                            st.success(
+                                f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{evento_ticket}**."
+                            )
+                            st.rerun()
 
     elif st.session_state.vista_admin == "lista":
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)

@@ -1,6 +1,7 @@
 import streamlit as st
 import sqlite3
 import uuid
+import os
 import pandas as pd
 import qrcode
 import zxingcpp
@@ -8,19 +9,19 @@ from PIL import Image
 from io import BytesIO
 from datetime import datetime
 
-st.set_page_config(page_title="COLECTIVO KALMA // ACCESS", page_icon="⚡", layout="centered")
+st.set_page_config(page_title="KALMA TECHNO // ACCESS", page_icon="🔴", layout="centered")
 
 # ==========================================
-# 🎨 ESTILO VISUAL: EVENTO ELECTRÓNICO (ALTO CONTRASTE)
+# 🎨 ESTILO VISUAL: KALMA TECHNO (NEGRO Y ROJO)
 # ==========================================
 st.markdown("""
 <style>
-    /* Fondo general oscuro */
+    /* Fondo negro puro para fundirse con el logo */
     .stApp {
-        background: radial-gradient(circle at top, #1a1025 0%, #09090b 65%);
+        background-color: #000000 !important;
         color: #ffffff !important;
     }
-    /* Forzar visibilidad de textos, etiquetas y opciones */
+    /* Visibilidad de textos, etiquetas y opciones */
     .stApp p, .stApp label, [data-testid="stWidgetLabel"] p,
     [data-testid="stRadio"] p, [data-testid="stCaptionContainer"] p,
     [data-testid="stMetricLabel"] p {
@@ -30,82 +31,78 @@ st.markdown("""
         font-weight: 600 !important;
         letter-spacing: 0.5px;
     }
-    /* Títulos con estilo club/electrónica */
+    /* Títulos */
     h1, h2, h3 {
         color: #ffffff !important;
-        letter-spacing: 1.5px;
+        letter-spacing: 2px;
         text-transform: uppercase;
     }
-    h1 {
-        text-shadow: 0 0 12px rgba(168, 85, 247, 0.7);
-    }
-    /* Botones principales y botón de cámara (Take Photo) */
+    /* Botones principales y botón de cámara (Rojo Techno) */
     .stButton > button[kind="primary"],
     .stFormSubmitButton > button,
     [data-testid="stCameraInputButton"] {
-        background: linear-gradient(90deg, #9333ea 0%, #06b6d4 100%) !important;
+        background: linear-gradient(90deg, #b91c1c 0%, #ef4444 100%) !important;
         color: #ffffff !important;
         border: none !important;
-        border-radius: 8px !important;
+        border-radius: 6px !important;
         font-weight: 700 !important;
-        letter-spacing: 1px;
+        letter-spacing: 1.5px;
         text-transform: uppercase;
-        box-shadow: 0 0 15px rgba(147, 51, 234, 0.4);
+        box-shadow: 0 0 15px rgba(220, 38, 38, 0.45);
         transition: all 0.2s ease-in-out;
     }
     .stButton > button[kind="primary"]:hover,
     .stFormSubmitButton > button:hover,
     [data-testid="stCameraInputButton"]:hover {
-        box-shadow: 0 0 22px rgba(6, 182, 212, 0.75);
+        box-shadow: 0 0 22px rgba(239, 68, 68, 0.8);
         transform: scale(1.01);
     }
     /* Botones secundarios */
     .stButton > button, .stDownloadButton > button {
-        background-color: #18181b !important;
+        background-color: #141414 !important;
         color: #ffffff !important;
-        border: 1px solid #52525b !important;
-        border-radius: 8px !important;
+        border: 1px solid #3f3f46 !important;
+        border-radius: 6px !important;
     }
     /* Inputs y formularios */
     .stTextInput > div > div > input, .stSelectbox > div > div {
-        background-color: #18181b !important;
+        background-color: #111111 !important;
         color: #ffffff !important;
-        border: 1px solid #7e22ce !important;
-        border-radius: 8px !important;
+        border: 1px solid #7f1d1d !important;
+        border-radius: 6px !important;
     }
-    /* Pestañas (activas e inactivas bien visibles) */
+    /* Pestañas */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
-        background-color: #121217;
+        background-color: #0d0d0d;
         padding: 6px;
-        border-radius: 10px;
-        border: 1px solid #3f3f46;
+        border-radius: 8px;
+        border: 1px solid #27272a;
     }
     .stTabs [data-baseweb="tab"] p {
         color: #d4d4d8 !important;
         font-weight: 600 !important;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #2e1065 !important;
-        border: 1px solid #9333ea !important;
+        background-color: #450a0a !important;
+        border: 1px solid #dc2626 !important;
         border-radius: 6px;
     }
     .stTabs [aria-selected="true"] p {
-        color: #22d3ee !important;
+        color: #fca5a5 !important;
     }
     /* Tarjeta de pase válido */
     .ticket-card {
-        background: linear-gradient(135deg, #18181b 0%, #1e1b4b 100%);
-        border: 2px solid #22d3ee;
-        border-radius: 12px;
+        background: linear-gradient(135deg, #0a0a0a 0%, #2a0a0a 100%);
+        border: 2px solid #ef4444;
+        border-radius: 10px;
         padding: 20px;
         margin: 15px 0;
-        box-shadow: 0 0 20px rgba(34, 211, 238, 0.25);
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
     }
     /* Métricas */
     [data-testid="stMetricValue"] {
-        color: #22d3ee !important;
-        text-shadow: 0 0 10px rgba(34, 211, 238, 0.4);
+        color: #ef4444 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -132,11 +129,15 @@ if "admin_usuario" not in st.session_state:
     st.session_state.admin_usuario = None
 
 # ==========================================
-# 🚪 PORTADA DE INICIO DE SESIÓN
+# 🚪 PORTADA DE INICIO DE SESIÓN CON LOGO
 # ==========================================
 if not st.session_state.autenticado:
-    st.markdown("<h1 style='text-align: center;'>⚡ COLECTIVO KALMA</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #22d3ee !important; letter-spacing: 3px; font-size: 14px;'>ELECTRONIC MUSIC // ACCESS CONTROL</p>", unsafe_allow_html=True)
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    else:
+        st.markdown("<h1 style='text-align: center; color: #ef4444 !important;'>KALMA TECHNO</h1>", unsafe_allow_html=True)
+
+    st.markdown("<p style='text-align: center; color: #a1a1aa !important; letter-spacing: 4px; font-size: 13px; margin-top: -10px;'>ACCESS CONTROL SYSTEM</p>", unsafe_allow_html=True)
     st.divider()
 
     with st.form("form_login"):
@@ -208,7 +209,10 @@ def pedir_acceso_admin(id_pestana):
 # --- BARRA SUPERIOR ---
 col_tit, col_salir = st.columns([3, 1])
 with col_tit:
-    st.markdown("## ⚡ COLECTIVO KALMA")
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=220)
+    else:
+        st.markdown("## 🔴 KALMA TECHNO")
 with col_salir:
     st.write("")
     if st.button("SALIR", use_container_width=True):
@@ -256,9 +260,9 @@ with tab1:
             else:
                 st.markdown(f"""
                 <div class="ticket-card">
-                    <p style="color:#22d3ee !important; font-weight:bold; margin:0; letter-spacing:2px;">✅ ACCESO VÁLIDO — VERIFICAR CARNET</p>
+                    <p style="color:#4ade80 !important; font-weight:bold; margin:0; letter-spacing:2px;">✅ ACCESO VÁLIDO — VERIFICAR CARNET</p>
                     <h2 style="margin:8px 0 4px 0;">👤 {nombre}</h2>
-                    <h3 style="color:#a855f7 !important; margin:0 0 12px 0;">🪪 RUT: {rut}</h3>
+                    <h3 style="color:#ef4444 !important; margin:0 0 12px 0;">🪪 RUT: {rut}</h3>
                     <p style="margin:0; font-size:14px;"><b>🎟️ PASE:</b> {tipo} &nbsp;|&nbsp; <b>🔑 ID:</b> {cod}</p>
                     <p style="margin:4px 0 0 0; font-size:12px; color:#d4d4d8 !important;">Generado por: {creado_por if creado_por else 'Sin registro'}</p>
                 </div>
@@ -276,13 +280,13 @@ with tab1:
 # ==========================================
 with tab2:
     if pedir_acceso_admin("tab2"):
-        st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
+        st.info(f"🔴 Producción activa: **{st.session_state.admin_usuario}**")
         st.subheader("EMITIR NUEVO E-TICKET")
         with st.form("form_crear", clear_on_submit=True):
             nombre = st.text_input("Nombre Completo")
             rut = st.text_input("RUT / Carnet (ej: 12.345.678-9)")
             tipo = st.selectbox("Tipo de Pase", ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"])
-            crear = st.form_submit_button("⚡ GENERAR E-TICKET QR", type="primary", use_container_width=True)
+            crear = st.form_submit_button("GENERAR E-TICKET QR", type="primary", use_container_width=True)
 
         if crear:
             if nombre.strip() and rut.strip():
@@ -319,7 +323,7 @@ with tab2:
 # ==========================================
 with tab3:
     if pedir_acceso_admin("tab3"):
-        st.info(f"⚡ Producción activa: **{st.session_state.admin_usuario}**")
+        st.info(f"🔴 Producción activa: **{st.session_state.admin_usuario}**")
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
 
         col1, col2, col3 = st.columns(3)

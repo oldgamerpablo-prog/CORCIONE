@@ -13,19 +13,26 @@ st.set_page_config(page_title="Colectivo Kalma - Control QR", page_icon="🎵", 
 # ==========================================
 # 🔐 CONFIGURACIÓN DE USUARIOS Y CONTRASEÑAS
 # ==========================================
+# Acceso general (Portada / Puerta)
 USUARIOS_ACCESO = {
     "Colectivo.Kalma": "Kalma.0720",
     "puerta": "1234"
 }
-CLAVE_ADMIN = "Kalma.0720"  # Contraseña para desbloquear Pestañas 2 y 3
+
+# Acceso administrador (Pestañas 2 y 3 con historial de creador)
+USUARIOS_ADMIN = {
+    "Javi.martinez": "Colectivo2026",
+    "Eric.brito": "Colectivo2026",
+    "Piero.corci": "Colectivo2026"
+}
 
 # --- ESTADOS DE SESIÓN ---
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 if "usuario_actual" not in st.session_state:
     st.session_state.usuario_actual = ""
-if "admin_desbloqueado" not in st.session_state:
-    st.session_state.admin_desbloqueado = False
+if "admin_usuario" not in st.session_state:
+    st.session_state.admin_usuario = None
 
 # ==========================================
 # 🚪 PORTADA DE INICIO DE SESIÓN
@@ -61,9 +68,15 @@ def init_db():
             tipo TEXT,
             estado TEXT,
             fecha_creacion TEXT,
-            fecha_ingreso TEXT
+            fecha_ingreso TEXT,
+            creado_por TEXT
         )
     """)
+    # Si ya existía una tabla anterior sin la columna 'creado_por', la agrega automáticamente
+    c.execute("PRAGMA table_info(entradas)")
+    columnas = [col[1] for col in c.fetchall()]
+    if "creado_por" not in columnas:
+        c.execute("ALTER TABLE entradas ADD COLUMN creado_por TEXT DEFAULT ''")
     conn.commit()
     return conn
 
@@ -78,21 +91,22 @@ def generar_imagen_qr(texto):
     img.save(buf, format="PNG")
     return buf.getvalue()
 
-def pedir_clave_admin(id_pestana):
-    """Bloquea las pestañas 2 y 3 hasta ingresar la clave de administrador."""
-    if st.session_state.admin_desbloqueado:
+def pedir_acceso_admin(id_pestana):
+    """Pide usuario y contraseña de administrador para desbloquear Pestañas 2 y 3."""
+    if st.session_state.admin_usuario is not None:
         return True
 
-    st.warning("🔒 Esta sección requiere contraseña de administrador.")
+    st.warning("🔒 Esta sección requiere acceso de administrador.")
     with st.form(f"form_admin_{id_pestana}"):
-        clave_ingresada = st.text_input("Contraseña de administrador", type="password")
+        admin_user = st.text_input("Usuario administrador")
+        admin_pass = st.text_input("Contraseña", type="password")
         desbloquear = st.form_submit_button("Desbloquear sección", type="primary")
         if desbloquear:
-            if clave_ingresada == CLAVE_ADMIN:
-                st.session_state.admin_desbloqueado = True
+            if admin_user in USUARIOS_ADMIN and USUARIOS_ADMIN[admin_user] == admin_pass:
+                st.session_state.admin_usuario = admin_user
                 st.rerun()
             else:
-                st.error("Contraseña de administrador incorrecta.")
+                st.error("Usuario o contraseña de administrador incorrectos.")
     return False
 
 # --- BARRA SUPERIOR ---
@@ -104,10 +118,10 @@ with col_salir:
     if st.button("Cerrar sesión", use_container_width=True):
         st.session_state.autenticado = False
         st.session_state.usuario_actual = ""
-        st.session_state.admin_desbloqueado = False
+        st.session_state.admin_usuario = None
         st.rerun()
 
-st.caption(f"Sesión activa: **{st.session_state.usuario_actual}**")
+st.caption(f"Sesión general: **{st.session_state.usuario_actual}**")
 
 tab1, tab2, tab3 = st.tabs(["📷 Validar en Puerta", "🔒 Generar Entrada", "🔒 Lista y Respaldo"])
 
@@ -133,13 +147,13 @@ with tab1:
 
     if codigo_leido:
         c = conn.cursor()
-        c.execute("SELECT codigo, nombre, rut, tipo, estado, fecha_ingreso FROM entradas WHERE codigo = ?", (codigo_leido,))
+        c.execute("SELECT codigo, nombre, rut, tipo, estado, fecha_ingreso, creado_por FROM entradas WHERE codigo = ?", (codigo_leido,))
         entrada = c.fetchone()
 
         if not entrada:
             st.error(f"❌ ENTRADA INVÁLIDA: El código `{codigo_leido}` no existe en el sistema.")
         else:
-            cod, nombre, rut, tipo, estado, fecha_ing = entrada
+            cod, nombre, rut, tipo, estado, fecha_ing, creado_por = entrada
             if estado == "USADA":
                 st.error("⚠️ ENTRADA YA UTILIZADA")
                 st.warning(f"**Titular:** {nombre} | **RUT:** {rut}\n\n**Ingresó el:** {fecha_ing}")
@@ -149,7 +163,8 @@ with tab1:
                 ### 👤 {nombre}
                 ### 🪪 RUT: `{rut}`
                 **🎟️ Tipo:** {tipo}  
-                **🔑 Código:** `{cod}`
+                **🔑 Código:** `{cod}`  
+                **✍️ Generada por:** {creado_por if creado_por else 'Sin registro'}
                 """)
                 if st.button("✅ Confirmar Ingreso (Quemar QR)", type="primary", use_container_width=True):
                     ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -159,10 +174,11 @@ with tab1:
                     st.rerun()
 
 # ==========================================
-# PESTAÑA 2: GENERAR ENTRADA (CON CLAVE ADMIN)
+# PESTAÑA 2: GENERAR ENTRADA (CON USUARIO ADMIN)
 # ==========================================
 with tab2:
-    if pedir_clave_admin("tab2"):
+    if pedir_acceso_admin("tab2"):
+        st.info(f"👤 Generando entradas como: **{st.session_state.admin_usuario}**")
         st.subheader("Crear nueva entrada nominativa")
         with st.form("form_crear", clear_on_submit=True):
             nombre = st.text_input("Nombre Completo")
@@ -174,22 +190,23 @@ with tab2:
             if nombre.strip() and rut.strip():
                 codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
                 ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                creador = st.session_state.admin_usuario
                 c = conn.cursor()
                 c.execute(
-                    "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (codigo_unico, nombre.strip(), rut.strip(), tipo, "DISPONIBLE", ahora, "")
+                    "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (codigo_unico, nombre.strip(), rut.strip(), tipo, "DISPONIBLE", ahora, "", creador)
                 )
                 conn.commit()
-                st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), tipo)
-                st.success(f"Entrada creada para **{nombre.strip()}** (`{codigo_unico}`)")
+                st.session_state["ultimo_qr"] = (codigo_unico, nombre.strip(), rut.strip(), tipo, creador)
+                st.success(f"Entrada creada para **{nombre.strip()}** (`{codigo_unico}`) por **{creador}**")
             else:
                 st.error("Debes completar el Nombre y el RUT.")
 
         if "ultimo_qr" in st.session_state:
-            cod, nom, rt, tp = st.session_state["ultimo_qr"]
+            cod, nom, rt, tp, cr = st.session_state["ultimo_qr"]
             qr_bytes = generar_imagen_qr(cod)
             st.divider()
-            st.write(f"**Último QR generado:** {nom} ({rt}) — {tp}")
+            st.write(f"**Último QR generado:** {nom} ({rt}) — {tp} | *Creado por: {cr}*")
             st.image(qr_bytes, width=250)
             st.download_button(
                 label="📥 Descargar imagen QR para enviar",
@@ -199,10 +216,11 @@ with tab2:
             )
 
 # ==========================================
-# PESTAÑA 3: LISTA Y RESPALDO (CON CLAVE ADMIN)
+# PESTAÑA 3: LISTA Y RESPALDO (CON USUARIO ADMIN)
 # ==========================================
 with tab3:
-    if pedir_clave_admin("tab3"):
+    if pedir_acceso_admin("tab3"):
+        st.info(f"👤 Administrador activo: **{st.session_state.admin_usuario}**")
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
 
         col1, col2, col3 = st.columns(3)
@@ -210,11 +228,12 @@ with tab3:
         col2.metric("Ingresados", len(df[df["estado"] == "USADA"]))
         col3.metric("Pendientes", len(df[df["estado"] == "DISPONIBLE"]))
 
-        busqueda = st.text_input("🔍 Buscar por Nombre o RUT:")
+        busqueda = st.text_input("🔍 Buscar por Nombre, RUT o Creador:")
         if busqueda:
             df_mostrar = df[
                 df["nombre"].str.contains(busqueda, case=False, na=False) |
-                df["rut"].str.contains(busqueda, case=False, na=False)
+                df["rut"].str.contains(busqueda, case=False, na=False) |
+                df["creado_por"].str.contains(busqueda, case=False, na=False)
             ]
         else:
             df_mostrar = df
@@ -237,15 +256,16 @@ with tab3:
                 df_nuevo = pd.read_csv(archivo_subido).fillna("")
                 c = conn.cursor()
                 for _, row in df_nuevo.iterrows():
+                    creador_csv = row["creado_por"] if "creado_por" in df_nuevo.columns else ""
                     c.execute(
-                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (row["codigo"], row["nombre"], row["rut"], row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"])
+                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row["codigo"], row["nombre"], row["rut"], row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv)
                     )
                 conn.commit()
                 st.success("Base de datos restaurada correctamente.")
                 st.rerun()
 
         st.divider()
-        if st.button("🔒 Volver a bloquear pestañas de administrador"):
-            st.session_state.admin_desbloqueado = False
+        if st.button("🔒 Cerrar sesión de administrador (bloquear pestañas 2 y 3)"):
+            st.session_state.admin_usuario = None
             st.rerun()

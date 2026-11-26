@@ -251,11 +251,36 @@ def forzar_camara_trasera():
         height=0,
     )
 
-def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
+def enviar_mensaje_smtp(msg, destino_legible):
     remitente = st.secrets.get("SMTP_EMAIL", "").strip()
     clave_app = st.secrets.get("SMTP_APP_PASSWORD", "").strip()
     if not remitente or not clave_app:
         return False, "Falta configurar SMTP_EMAIL y SMTP_APP_PASSWORD en Streamlit Secrets."
+
+    ultimo_error = None
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
+            smtp.login(remitente, clave_app)
+            smtp.send_message(msg)
+        return True, f"Correo enviado a {destino_legible}."
+    except Exception as exc:
+        ultimo_error = exc
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(remitente, clave_app)
+            smtp.send_message(msg)
+        return True, f"Correo enviado a {destino_legible}."
+    except Exception as exc2:
+        return False, f"No se pudo enviar a {destino_legible} ({exc2 or ultimo_error})."
+
+def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, codigo, ticket_bytes):
+    remitente = st.secrets.get("SMTP_EMAIL", "").strip()
+    if not remitente:
+        return False, "Falta configurar SMTP_EMAIL en Streamlit Secrets."
 
     destino_individual = str(destinatario).strip()
     if not destino_individual:
@@ -371,25 +396,72 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         filename=f"ETICKET_KALMA_{limpiar_nombre_archivo(evento)}_{codigo}.png"
     )
 
-    ultimo_error = None
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
-            smtp.login(remitente, clave_app)
-            smtp.send_message(msg)
-        return True, f"E-Ticket enviado individualmente a {destino_individual}."
-    except Exception as exc:
-        ultimo_error = exc
+    return enviar_mensaje_smtp(msg, destino_individual)
 
-    try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
-            smtp.login(remitente, clave_app)
-            smtp.send_message(msg)
-        return True, f"E-Ticket enviado individualmente a {destino_individual}."
-    except Exception as exc2:
-        return False, f"No se pudo enviar a {destino_individual} ({exc2 or ultimo_error})."
+def enviar_aviso_renominacion_titular_anterior(
+    destinatario_anterior,
+    nombre_anterior,
+    rut_anterior,
+    nombre_nuevo,
+    rut_nuevo,
+    correo_nuevo,
+    tipo_nuevo,
+    evento,
+    codigo,
+    codigo_ren,
+    motivo
+):
+    remitente = st.secrets.get("SMTP_EMAIL", "").strip()
+    if not remitente:
+        return False, "Falta configurar SMTP_EMAIL en Streamlit Secrets."
+
+    destino = str(destinatario_anterior).strip()
+    if not destino or not correo_valido(destino):
+        return False, "Titular anterior sin correo válido."
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Aviso de renominación de entrada ({codigo}) — {evento}"
+    msg["From"] = remitente
+    msg["To"] = destino
+
+    texto_plano = (
+        f"Hola {nombre_anterior},\n\n"
+        f"Te informamos que tu entrada para {evento} ha sido renombrada.\n"
+        f"• Folio de renominación: {codigo_ren}\n"
+        f"• Código del ticket: {codigo}\n"
+        f"• Motivo: {motivo}\n"
+        f"• Titular anterior: {nombre_anterior} (RUT: {rut_anterior})\n"
+        f"• Nuevo titular asignado: {nombre_nuevo} (RUT: {rut_nuevo} | Pase: {tipo_nuevo})\n\n"
+        f"A partir de esta actualización, el acceso en puerta se validará según el registro vigente del nuevo titular."
+    )
+    msg.set_content(texto_plano)
+
+    html_cuerpo = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0; padding:24px; background-color:#09090b; font-family:Arial, Helvetica, sans-serif; color:#f4f4f5;">
+      <div style="max-width:560px; margin:0 auto; background:linear-gradient(160deg,#181026 0%,#10131f 100%); border:1px solid #9333ea; border-radius:16px; padding:24px;">
+        <h2 style="margin:0 0 10px 0; color:#22d3ee;">Aviso de Renominación de Entrada</h2>
+        <p style="margin:0 0 14px 0; font-size:14px; line-height:1.6; color:#e4e4e7;">
+          Hola <strong>{nombre_anterior}</strong>, te confirmamos que la entrada asociada al código
+          <strong style="color:#22d3ee;">{codigo}</strong> para el evento <strong>{evento}</strong> ha sido renombrada.
+        </p>
+        <div style="background-color:#0d0e16; border:1px solid #3f3f46; border-radius:12px; padding:14px 16px; font-size:13px; line-height:1.7;">
+          <div><strong style="color:#a855f7;">Folio:</strong> {codigo_ren}</div>
+          <div><strong style="color:#a855f7;">Motivo:</strong> {motivo}</div>
+          <div><strong style="color:#a855f7;">Titular anterior:</strong> {nombre_anterior} ({rut_anterior})</div>
+          <div><strong style="color:#a855f7;">Nuevo titular:</strong> <span style="color:#22d3ee; font-weight:bold;">{nombre_nuevo}</span> ({rut_nuevo})</div>
+          <div><strong style="color:#a855f7;">Tipo de pase:</strong> {tipo_nuevo}</div>
+        </div>
+        <p style="margin:14px 0 0 0; font-size:12px; color:#a1a1aa;">
+          El registro vigente en puerta queda asignado al nuevo titular indicado.
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+    msg.add_alternative(html_cuerpo, subtype="html")
+    return enviar_mensaje_smtp(msg, destino)
 
 def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto):
     if archivo.name.lower().endswith(".xlsx"):
@@ -1185,10 +1257,13 @@ elif st.session_state.rol_sesion == "admin":
 
     elif st.session_state.vista_admin == "renominar":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
-        st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos manteniendo el mismo QR y el folio correlativo (REN-001).")
+        st.caption("Busca con la lupa en todos los eventos o filtra por un evento generado, y actualiza los datos enviando aviso al titular anterior y E-Ticket al titular actual.")
 
         if st.session_state.get("ren_msg_exito"):
             st.success(st.session_state.pop("ren_msg_exito"))
+        if st.session_state.get("ren_msg_avisos"):
+            for av_m in st.session_state.pop("ren_msg_avisos"):
+                st.warning(av_m)
 
         reparar_filas_desplazadas(conn)
         eventos_dict_ren = obtener_eventos()
@@ -1302,15 +1377,24 @@ elif st.session_state.rol_sesion == "admin":
                         elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
                             st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
                         else:
+                            nombre_ant_val = str(fila_actual["nombre"]).strip()
+                            rut_ant_val = str(fila_actual["rut"]).strip()
+                            correo_ant_val = str(fila_actual["correo"]).strip()
+                            tipo_ant_val = str(fila_actual["tipo"]).strip()
+
+                            nombre_nue_val = nuevo_nombre.strip()
+                            rut_nue_val = nuevo_rut.strip()
+                            correo_nue_val = nuevo_correo.strip()
+
                             codigo_ren = siguiente_codigo_ren(conn)
                             fecha_ren = ahora_chile().strftime("%d/%m/%Y %H:%M")
                             anterior_txt = (
-                                f"ANTERIOR [{codigo_ren}]: {fila_actual['nombre']} | RUT: {fila_actual['rut']} | "
-                                f"Correo: {fila_actual['correo'] or 'Sin correo'} | Pase: {fila_actual['tipo']}"
+                                f"ANTERIOR [{codigo_ren}]: {nombre_ant_val} | RUT: {rut_ant_val} | "
+                                f"Correo: {correo_ant_val or 'Sin correo'} | Pase: {tipo_ant_val}"
                             )
                             nuevo_txt = (
-                                f"NUEVO [{codigo_ren}]: {nuevo_nombre.strip()} | RUT: {nuevo_rut.strip()} | "
-                                f"Correo: {nuevo_correo.strip() or 'Sin correo'} | Pase: {nuevo_tipo}"
+                                f"NUEVO [{codigo_ren}]: {nombre_nue_val} | RUT: {rut_nue_val} | "
+                                f"Correo: {correo_nue_val or 'Sin correo'} | Pase: {nuevo_tipo}"
                             )
                             marca_cambio = (
                                 f"[{codigo_ren} - RENOMINADA] {fecha_ren} | Evento: '{evento_ticket}' | Motivo: {motivo_ren} | "
@@ -1326,9 +1410,57 @@ elif st.session_state.rol_sesion == "admin":
                             c = conn.cursor()
                             c.execute(
                                 "UPDATE entradas SET nombre = ?, rut = ?, correo = ?, tipo = ?, nota_renominacion = ? WHERE codigo = ?",
-                                (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
+                                (nombre_nue_val, rut_nue_val, correo_nue_val, nuevo_tipo, nota_acumulada, codigo_sel)
                             )
                             conn.commit()
+
+                            avisos_envio = []
+                            if correo_ant_val and correo_valido(correo_ant_val):
+                                ok_ant, det_ant = enviar_aviso_renominacion_titular_anterior(
+                                    correo_ant_val,
+                                    nombre_ant_val,
+                                    rut_ant_val,
+                                    nombre_nue_val,
+                                    rut_nue_val,
+                                    correo_nue_val,
+                                    nuevo_tipo,
+                                    evento_ticket or "Evento",
+                                    codigo_sel,
+                                    codigo_ren,
+                                    motivo_ren,
+                                )
+                                if ok_ant:
+                                    avisos_envio.append(f"Aviso enviado al titular anterior ({correo_ant_val}).")
+                                else:
+                                    avisos_envio.append(f"No se pudo enviar aviso al titular anterior: {det_ant}")
+                            else:
+                                avisos_envio.append("El titular anterior no tenía correo válido registrado.")
+
+                            if correo_nue_val:
+                                ticket_nuevo_bytes = generar_tarjeta_qr_bytes(
+                                    codigo_sel,
+                                    nombre_nue_val,
+                                    rut_nue_val,
+                                    nuevo_tipo,
+                                    evento_ticket or "Evento",
+                                    ref_cad,
+                                )
+                                ok_nue, det_nue = enviar_qr_por_correo(
+                                    correo_nue_val,
+                                    nombre_nue_val,
+                                    rut_nue_val,
+                                    nuevo_tipo,
+                                    evento_ticket or "Evento",
+                                    ref_cad,
+                                    codigo_sel,
+                                    ticket_nuevo_bytes,
+                                )
+                                if ok_nue:
+                                    avisos_envio.append(f"E-Ticket enviado al titular actual ({correo_nue_val}).")
+                                else:
+                                    avisos_envio.append(f"No se pudo enviar E-Ticket al titular actual: {det_nue}")
+                            else:
+                                avisos_envio.append("No se ingresó correo para el titular actual.")
 
                             nuevo_reset = st.session_state.ren_reset_id + 1
                             st.session_state.ren_reset_id = nuevo_reset
@@ -1339,8 +1471,9 @@ elif st.session_state.rol_sesion == "admin":
                                 st.session_state[clave_nue] = ""
 
                             st.session_state["ren_msg_exito"] = (
-                                f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{evento_ticket}**."
+                                f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nombre_nue_val}** ({rut_nue_val}) para **{evento_ticket}**."
                             )
+                            st.session_state["ren_msg_avisos"] = avisos_envio
                             st.rerun()
 
     elif st.session_state.vista_admin == "lista":

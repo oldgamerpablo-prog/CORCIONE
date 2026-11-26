@@ -15,7 +15,7 @@ st.set_page_config(page_title="Colectivo Kalma - Control QR", page_icon="🎵", 
 # ==========================================
 # Acceso general (Portada / Puerta)
 USUARIOS_ACCESO = {
-    "Colectivo.Kalma": "Kalma.0720",
+    "Colectivo.kalma": "Kalma.0720",
     "puerta": "1234"
 }
 

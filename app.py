@@ -179,7 +179,12 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         f"• Tipo de pase: {tipo}\n"
         f"• Código: {codigo}\n"
         f"• Válido hasta: {caducidad}\n\n"
-        f"Presenta el E-Ticket adjunto y tu carnet en el acceso."
+        f"Presenta el E-Ticket adjunto y tu carnet en el acceso.\n\n"
+        f"RENOMINACIÓN (CESIÓN O REVENTA):\n"
+        f"Si no podrás asistir y transfieres o revendes tu entrada, NO reenvíes el QR sin avisar. "
+        f"Escríbenos indicando el código del ticket ({codigo}), nombre, RUT y correo del nuevo asistente, "
+        f"junto con el motivo (cesión o reventa). El QR seguirá asociado al titular registrado en el sistema "
+        f"hasta que producción actualice los datos, y en puerta se pedirá carnet acorde al registro vigente."
     )
     msg.set_content(texto_plano)
 
@@ -231,7 +236,21 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
             <img src="cid:qr_ticket" alt="E-Ticket QR" style="max-width:100%; width:320px; height:auto; border-radius:10px; display:block; margin:0 auto;" />
           </div>
 
-          <p style="margin:18px 0 0 0; font-size:12px; line-height:1.5; color:#a1a1aa; text-align:center;">
+          <div style="margin-top:18px; background-color:#14111f; border:1px solid #7e22ce; border-radius:12px; padding:14px 16px; font-size:12px; line-height:1.6; color:#e4e4e7;">
+            <div style="color:#22d3ee; font-weight:bold; letter-spacing:1px; margin-bottom:6px; text-transform:uppercase;">
+              🔄 Renominación (Cesión o Reventa)
+            </div>
+            <p style="margin:0 0 6px 0;">
+              Si no podrás asistir y transfieres o revendes tu entrada, <strong>no reenvíes el QR sin avisar</strong>.
+              Escríbenos indicando el código del ticket (<strong>{codigo}</strong>), <strong>nombre</strong>, <strong>RUT</strong> y <strong>correo</strong> del nuevo asistente,
+              junto con el motivo (<strong>cesión</strong> o <strong>reventa</strong>).
+            </p>
+            <p style="margin:0; color:#d4d4d8;">
+              El QR seguirá asociado al titular registrado en el sistema hasta que producción actualice los datos, y en el acceso se pedirá carnet acorde al registro vigente.
+            </p>
+          </div>
+
+          <p style="margin:14px 0 0 0; font-size:12px; line-height:1.5; color:#a1a1aa; text-align:center;">
             Recuerda llevar tu <strong style="color:#ffffff;">carnet de identidad</strong> y tener el brillo de tu pantalla alto al llegar a la puerta.
             Este código es personal e intransferible y caduca automáticamente en la fecha y hora indicadas.
           </p>
@@ -542,7 +561,8 @@ def init_db():
             fecha_ingreso TEXT,
             creado_por TEXT,
             evento TEXT,
-            caducidad TEXT
+            caducidad TEXT,
+            nota_renominacion TEXT
         )
     """)
     c.execute("""
@@ -561,6 +581,8 @@ def init_db():
         c.execute("ALTER TABLE entradas ADD COLUMN evento TEXT DEFAULT ''")
     if "caducidad" not in columnas:
         c.execute("ALTER TABLE entradas ADD COLUMN caducidad TEXT DEFAULT ''")
+    if "nota_renominacion" not in columnas:
+        c.execute("ALTER TABLE entradas ADD COLUMN nota_renominacion TEXT DEFAULT ''")
     conn.commit()
     return conn
 
@@ -740,7 +762,7 @@ if st.session_state.rol_sesion == "puerta":
 # VISTA PRODUCCIÓN / ADMIN (BOTONES SIN PESTAÑAS)
 # ==========================================
 elif st.session_state.rol_sesion == "admin":
-    col_nav1, col_nav2 = st.columns(2)
+    col_nav1, col_nav2, col_nav3 = st.columns(3)
     with col_nav1:
         if st.button(
             "⚡ GENERAR QR",
@@ -750,6 +772,14 @@ elif st.session_state.rol_sesion == "admin":
             st.session_state.vista_admin = "generar"
             st.rerun()
     with col_nav2:
+        if st.button(
+            "🔄 RENOMINAR",
+            type="primary" if st.session_state.vista_admin == "renominar" else "secondary",
+            use_container_width=True
+        ):
+            st.session_state.vista_admin = "renominar"
+            st.rerun()
+    with col_nav3:
         if st.button(
             "📊 LISTA & BACKUP",
             type="primary" if st.session_state.vista_admin == "lista" else "secondary",
@@ -854,8 +884,8 @@ elif st.session_state.rol_sesion == "admin":
                         creador = st.session_state.usuario_actual
                         c = conn.cursor()
                         c.execute(
-                            "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], "DISPONIBLE", ahora_str, "", creador, b["evento"], b["caducidad"])
+                            "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (codigo_unico, b["nombre"], b["rut"], b["correo"], b["tipo"], "DISPONIBLE", ahora_str, "", creador, b["evento"], b["caducidad"], "")
                         )
                         conn.commit()
                         ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"])
@@ -944,8 +974,8 @@ elif st.session_state.rol_sesion == "admin":
                             if ev_fila:
                                 c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (ev_fila, cad_fila))
                             c.execute(
-                                "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (codigo_fila, nom_fila, rut_fila, cor_fila, tp_fila, "DISPONIBLE", ahora_str, "", creador, ev_fila, cad_fila)
+                                "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                (codigo_fila, nom_fila, rut_fila, cor_fila, tp_fila, "DISPONIBLE", ahora_str, "", creador, ev_fila, cad_fila, "")
                             )
                             if cor_fila:
                                 qr_fila_bytes = generar_tarjeta_qr_bytes(codigo_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila)
@@ -987,6 +1017,83 @@ elif st.session_state.rol_sesion == "admin":
             )
         elif "ultimo_qr" in st.session_state:
             del st.session_state["ultimo_qr"]
+
+    elif st.session_state.vista_admin == "renominar":
+        st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
+        st.caption("Busca la entrada por código KLM, RUT o nombre, actualiza los datos del nuevo asistente y guarda el cambio. El código QR se mantiene igual.")
+
+        df_ren = pd.read_sql_query(
+            "SELECT codigo, nombre, rut, correo, tipo, estado, evento, caducidad, nota_renominacion FROM entradas ORDER BY fecha_creacion DESC",
+            conn
+        )
+
+        if df_ren.empty:
+            st.info("No hay entradas registradas aún para renombrar.")
+        else:
+            filtro_ren = st.text_input("🔍 Buscar entrada por código, RUT o nombre actual:").strip()
+            df_filtrado_ren = df_ren.copy()
+            if filtro_ren:
+                df_filtrado_ren = df_filtrado_ren[
+                    df_filtrado_ren["codigo"].str.contains(filtro_ren, case=False, na=False) |
+                    df_filtrado_ren["rut"].str.contains(filtro_ren, case=False, na=False) |
+                    df_filtrado_ren["nombre"].str.contains(filtro_ren, case=False, na=False)
+                ]
+
+            if df_filtrado_ren.empty:
+                st.warning("No se encontraron entradas con ese filtro.")
+            else:
+                opciones_ren = [
+                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento']} [{r['estado']}]"
+                    for _, r in df_filtrado_ren.iterrows()
+                ]
+                seleccion_ren = st.selectbox("Selecciona la entrada a renombrar:", opciones_ren)
+                codigo_sel = seleccion_ren.split(" — ", 1)[0].strip()
+                fila_actual = df_ren[df_ren["codigo"] == codigo_sel].iloc[0]
+
+                if fila_actual["estado"] == "USADA":
+                    st.warning("⚠️ Esta entrada ya figura como **USADA** en puerta.")
+
+                st.markdown(
+                    f"**Titular actual:** {fila_actual['nombre']} | **RUT:** {fila_actual['rut']} | "
+                    f"**Correo:** {fila_actual['correo'] or 'Sin correo'} | **Pase:** {fila_actual['tipo']}"
+                )
+                if fila_actual["nota_renominacion"]:
+                    st.caption(f"📝 Historial previo: {fila_actual['nota_renominacion']}")
+
+                tipos_pase = ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"]
+                idx_tipo = tipos_pase.index(fila_actual["tipo"]) if fila_actual["tipo"] in tipos_pase else 3
+
+                with st.form("form_renominar"):
+                    nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]))
+                    nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]))
+                    nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
+                    nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo)
+                    motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"])
+                    detalle_ren = st.text_input("Observación / titular anterior (opcional)", placeholder="Ej: Cedido por Juan Pérez")
+                    guardar_ren = st.form_submit_button("💾 GUARDAR RENOMINACIÓN", type="primary", use_container_width=True)
+
+                if guardar_ren:
+                    if not nuevo_nombre.strip() or not nuevo_rut.strip():
+                        st.error("Debes completar el Nombre y el RUT del nuevo asistente.")
+                    elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
+                        st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
+                    else:
+                        marca_cambio = f"[{ahora_chile().strftime('%d/%m/%Y %H:%M')}] {motivo_ren}: de '{fila_actual['nombre']}' ({fila_actual['rut']}) a '{nuevo_nombre.strip()}' ({nuevo_rut.strip()}) por {st.session_state.usuario_actual}"
+                        if detalle_ren.strip():
+                            marca_cambio += f" — {detalle_ren.strip()}"
+                        nota_acumulada = (
+                            f"{fila_actual['nota_renominacion']} | {marca_cambio}"
+                            if fila_actual["nota_renominacion"]
+                            else marca_cambio
+                        )
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE entradas SET nombre = ?, rut = ?, correo = ?, tipo = ?, nota_renominacion = ? WHERE codigo = ?",
+                            (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
+                        )
+                        conn.commit()
+                        st.success(f"Entrada `{codigo_sel}` renombrada a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}).")
+                        st.rerun()
 
     elif st.session_state.vista_admin == "lista":
         df = pd.read_sql_query("SELECT * FROM entradas ORDER BY fecha_creacion DESC", conn)
@@ -1047,9 +1154,10 @@ elif st.session_state.rol_sesion == "admin":
                     creador_csv = row["creado_por"] if "creado_por" in df_nuevo.columns else ""
                     evento_csv = row["evento"] if "evento" in df_nuevo.columns else ""
                     cad_csv = row["caducidad"] if "caducidad" in df_nuevo.columns else ""
+                    nota_csv = row["nota_renominacion"] if "nota_renominacion" in df_nuevo.columns else ""
                     c.execute(
-                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (row["codigo"], row["nombre"], row["rut"], correo_csv, row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv, evento_csv, cad_csv)
+                        "INSERT OR REPLACE INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (row["codigo"], row["nombre"], row["rut"], correo_csv, row["tipo"], row["estado"], row["fecha_creacion"], row["fecha_ingreso"], creador_csv, evento_csv, cad_csv, nota_csv)
                     )
                     if evento_csv:
                         c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (evento_csv, cad_csv))

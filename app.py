@@ -1020,7 +1020,7 @@ elif st.session_state.rol_sesion == "admin":
 
     elif st.session_state.vista_admin == "renominar":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
-        st.caption("Actualiza los datos del titular manteniendo el mismo código QR y guardando el historial anterior.")
+        st.caption("Filtra por evento exacto, ubica la entrada y actualiza los datos manteniendo el mismo código QR y el historial anterior.")
 
         df_ren = pd.read_sql_query(
             "SELECT codigo, nombre, rut, correo, tipo, estado, evento, caducidad, nota_renominacion FROM entradas ORDER BY fecha_creacion DESC",
@@ -1030,8 +1030,13 @@ elif st.session_state.rol_sesion == "admin":
         if df_ren.empty:
             st.info("No hay entradas registradas aún para renombrar.")
         else:
+            eventos_ren = ["Todos los eventos"] + sorted([str(e).strip() for e in df_ren["evento"].dropna().unique() if str(e).strip() != ""])
+            evento_ren_sel = st.selectbox("🎧 Evento (coincidencia exacta):", eventos_ren, key="sel_evento_ren")
+
             filtro_ren = st.text_input("🔍 Buscar entrada por código, RUT o nombre actual:").strip()
             df_filtrado_ren = df_ren.copy()
+            if evento_ren_sel != "Todos los eventos":
+                df_filtrado_ren = df_filtrado_ren[df_filtrado_ren["evento"] == evento_ren_sel]
             if filtro_ren:
                 df_filtrado_ren = df_filtrado_ren[
                     df_filtrado_ren["codigo"].str.contains(filtro_ren, case=False, na=False) |
@@ -1040,10 +1045,10 @@ elif st.session_state.rol_sesion == "admin":
                 ]
 
             if df_filtrado_ren.empty:
-                st.warning("No se encontraron entradas con ese filtro.")
+                st.warning("No se encontraron entradas con ese evento o filtro.")
             else:
                 opciones_ren = [
-                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento']} [{r['estado']}]"
+                    f"{r['codigo']} — {r['nombre']} ({r['rut']}) | {r['evento'] or 'Sin evento'} [{r['estado']}]"
                     for _, r in df_filtrado_ren.iterrows()
                 ]
                 seleccion_ren = st.selectbox("Selecciona la entrada a renombrar:", opciones_ren)
@@ -1055,7 +1060,8 @@ elif st.session_state.rol_sesion == "admin":
 
                 st.markdown(
                     f"**Titular actual:** {fila_actual['nombre']} | **RUT:** {fila_actual['rut']} | "
-                    f"**Correo:** {fila_actual['correo'] or 'Sin correo'} | **Pase:** {fila_actual['tipo']}"
+                    f"**Correo:** {fila_actual['correo'] or 'Sin correo'} | **Pase:** {fila_actual['tipo']}  \n"
+                    f"**Evento:** {fila_actual['evento'] or 'Sin evento'} | **Caducidad:** {fila_actual['caducidad'] or 'Sin límite'}"
                 )
                 if fila_actual["nota_renominacion"]:
                     st.caption(f"📝 Historial anterior: {fila_actual['nota_renominacion']}")
@@ -1064,6 +1070,7 @@ elif st.session_state.rol_sesion == "admin":
                 idx_tipo = tipos_pase.index(fila_actual["tipo"]) if fila_actual["tipo"] in tipos_pase else 3
 
                 with st.form("form_renominar"):
+                    evento_confirmado = st.text_input("Evento del ticket (coincidencia exacta)", value=str(fila_actual["evento"]))
                     nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]))
                     nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]))
                     nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
@@ -1075,10 +1082,18 @@ elif st.session_state.rol_sesion == "admin":
                 if guardar_ren:
                     if not nuevo_nombre.strip() or not nuevo_rut.strip():
                         st.error("Debes completar el Nombre y el RUT del nuevo asistente.")
+                    elif evento_confirmado.strip() != str(fila_actual["evento"]).strip():
+                        st.error(
+                            f"El evento ingresado (`{evento_confirmado.strip()}`) no coincide exactamente con el evento registrado del ticket (`{fila_actual['evento']}`)."
+                        )
                     elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
                         st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
                     else:
-                        marca_cambio = f"[{ahora_chile().strftime('%d/%m/%Y %H:%M')}] {motivo_ren}: de '{fila_actual['nombre']}' ({fila_actual['rut']}) a '{nuevo_nombre.strip()}' ({nuevo_rut.strip()}) por {st.session_state.usuario_actual}"
+                        marca_cambio = (
+                            f"[{ahora_chile().strftime('%d/%m/%Y %H:%M')}] {motivo_ren} "
+                            f"(Evento: '{fila_actual['evento']}'): de '{fila_actual['nombre']}' ({fila_actual['rut']}) "
+                            f"a '{nuevo_nombre.strip()}' ({nuevo_rut.strip()}) por {st.session_state.usuario_actual}"
+                        )
                         if detalle_ren.strip():
                             marca_cambio += f" — {detalle_ren.strip()}"
                         nota_acumulada = (
@@ -1092,7 +1107,7 @@ elif st.session_state.rol_sesion == "admin":
                             (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
                         )
                         conn.commit()
-                        st.success(f"Entrada `{codigo_sel}` renombrada a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}).")
+                        st.success(f"Entrada `{codigo_sel}` renombrada a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{fila_actual['evento']}**.")
                         st.rerun()
 
     elif st.session_state.vista_admin == "lista":

@@ -1,6 +1,6 @@
 streamlit
 pandas
-pillow
-qrcode
-zxing-cpp
-openpyxl
+gspread
+google-auth
+qrcode[pil]
+Pillow

@@ -162,10 +162,14 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
     if not remitente or not clave_app:
         return False, "Falta configurar SMTP_EMAIL y SMTP_APP_PASSWORD en Streamlit Secrets."
 
+    destino_individual = str(destinatario).strip()
+    if not destino_individual:
+        return False, "Correo de destino vacío."
+
     msg = EmailMessage()
     msg["Subject"] = f"¡Bienvenido a {evento}! Tu E-Ticket QR — Colectivo Kalma"
     msg["From"] = remitente
-    msg["To"] = destinatario
+    msg["To"] = destino_individual
 
     texto_plano = (
         f"¡Bienvenido/a {nombre} a Colectivo Kalma!\n\n"
@@ -258,7 +262,7 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=20) as smtp:
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"E-Ticket enviado automáticamente a {destinatario}."
+        return True, f"E-Ticket enviado individualmente a {destino_individual}."
     except Exception as exc:
         ultimo_error = exc
 
@@ -269,9 +273,9 @@ def enviar_qr_por_correo(destinatario, nombre, rut, tipo, evento, caducidad, cod
             smtp.ehlo()
             smtp.login(remitente, clave_app)
             smtp.send_message(msg)
-        return True, f"E-Ticket enviado automáticamente a {destinatario}."
+        return True, f"E-Ticket enviado individualmente a {destino_individual}."
     except Exception as exc2:
-        return False, f"No se pudo enviar el correo ({exc2 or ultimo_error})."
+        return False, f"No se pudo enviar a {destino_individual} ({exc2 or ultimo_error})."
 
 def normalizar_excel_masivo(archivo, evento_defecto, fecha_defecto, hora_defecto):
     if archivo.name.lower().endswith(".xlsx"):
@@ -860,9 +864,10 @@ elif st.session_state.rol_sesion == "admin":
 
                         msg_envio = ""
                         error_envio = ""
-                        if b["correo"]:
+                        correo_unificado = str(b["correo"]).strip()
+                        if correo_unificado:
                             ok_mail, detalle_mail = enviar_qr_por_correo(
-                                b["correo"], b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"], codigo_unico, ticket_bytes
+                                correo_unificado, b["nombre"], b["rut"], b["tipo"], b["evento"], b["caducidad"], codigo_unico, ticket_bytes
                             )
                             if ok_mail:
                                 msg_envio = f" | {detalle_mail}"
@@ -882,7 +887,8 @@ elif st.session_state.rol_sesion == "admin":
         with st.expander("📦 CARGA MASIVA DE QR DESDE EXCEL"):
             st.caption(
                 "Columnas en el Excel: `nombre`, `rut`, `correo`, `tipo` (o `tipo de pase`), "
-                "**`Nombre del Evento`**, **`Fecha caducidad`** y **`Hora límite`**."
+                "**`Nombre del Evento`**, **`Fecha caducidad`** y **`Hora límite`**. "
+                "Cada fila se envía únicamente al correo asignado en esa misma fila."
             )
             archivo_masivo = st.file_uploader("Sube tu archivo Excel (.xlsx) o CSV", type=["xlsx", "csv"], key="uploader_masivo")
 
@@ -905,8 +911,8 @@ elif st.session_state.rol_sesion == "admin":
                 total_regs = len(bm["registros"])
                 con_correo = sum(1 for r in bm["registros"] if r["correo"])
                 st.warning(
-                    f"❓ **¿Estás seguro de generar y enviar {total_regs} E-Tickets?** "
-                    f"({con_correo} con correo para envío automático según el evento y caducidad de cada fila)."
+                    f"❓ **¿Estás seguro de generar y enviar {total_regs} E-Tickets de forma individual?** "
+                    f"({con_correo} filas enviarán su QR solo a su propio correo asignado)."
                 )
                 st.dataframe(pd.DataFrame(bm["registros"]), use_container_width=True, hide_index=True)
 
@@ -921,34 +927,45 @@ elif st.session_state.rol_sesion == "admin":
                         ahora_str = ahora_chile().strftime("%Y-%m-%d %H:%M:%S")
                         enviados_ok = 0
                         enviados_err = 0
+                        errores_detalle = []
                         barra = st.progress(0)
                         estado_txt = st.empty()
 
                         for i, reg in enumerate(bm["registros"]):
-                            estado_txt.text(f"Procesando {i + 1}/{total_regs}: {reg['nombre']}...")
-                            codigo_unico = f"KLM-{uuid.uuid4().hex[:8].upper()}"
-                            if reg["evento"]:
-                                c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (reg["evento"], reg["caducidad"]))
+                            nom_fila = str(reg["nombre"]).strip()
+                            rut_fila = str(reg["rut"]).strip()
+                            cor_fila = str(reg["correo"]).strip()
+                            tp_fila = str(reg["tipo"]).strip()
+                            ev_fila = str(reg["evento"]).strip()
+                            cad_fila = str(reg["caducidad"]).strip()
+
+                            estado_txt.text(f"Procesando {i + 1}/{total_regs}: {nom_fila} -> {cor_fila or 'sin correo'}...")
+                            codigo_fila = f"KLM-{uuid.uuid4().hex[:8].upper()}"
+                            if ev_fila:
+                                c.execute("INSERT OR IGNORE INTO eventos VALUES (?, ?)", (ev_fila, cad_fila))
                             c.execute(
                                 "INSERT INTO entradas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                (codigo_unico, reg["nombre"], reg["rut"], reg["correo"], reg["tipo"], "DISPONIBLE", ahora_str, "", creador, reg["evento"], reg["caducidad"])
+                                (codigo_fila, nom_fila, rut_fila, cor_fila, tp_fila, "DISPONIBLE", ahora_str, "", creador, ev_fila, cad_fila)
                             )
-                            if reg["correo"]:
-                                ticket_bytes = generar_tarjeta_qr_bytes(codigo_unico, reg["nombre"], reg["rut"], reg["tipo"], reg["evento"], reg["caducidad"])
-                                ok_m, _ = enviar_qr_por_correo(
-                                    reg["correo"], reg["nombre"], reg["rut"], reg["tipo"], reg["evento"], reg["caducidad"], codigo_unico, ticket_bytes
+                            if cor_fila:
+                                qr_fila_bytes = generar_tarjeta_qr_bytes(codigo_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila)
+                                ok_m, detalle_m = enviar_qr_por_correo(
+                                    cor_fila, nom_fila, rut_fila, tp_fila, ev_fila, cad_fila, codigo_fila, qr_fila_bytes
                                 )
                                 if ok_m:
                                     enviados_ok += 1
                                 else:
                                     enviados_err += 1
+                                    errores_detalle.append(detalle_m)
                                 pytime.sleep(0.25)
                             barra.progress((i + 1) / total_regs)
 
                         conn.commit()
                         st.session_state.borrador_masivo = None
                         estado_txt.empty()
-                        st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos enviados | {enviados_err} con error de envío.")
+                        st.success(f"Carga masiva lista: {total_regs} QR generados | {enviados_ok} correos individuales enviados | {enviados_err} con error.")
+                        for err_item in errores_detalle:
+                            st.error(err_item)
                 with col_m_no:
                     if st.button("❌ CANCELAR LOTE", use_container_width=True):
                         st.session_state.borrador_masivo = None

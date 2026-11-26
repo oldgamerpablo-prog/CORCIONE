@@ -626,6 +626,18 @@ def obtener_eventos():
     c.execute("SELECT nombre, caducidad FROM eventos ORDER BY nombre ASC")
     return dict(c.fetchall())
 
+def siguiente_codigo_ren(conn):
+    c = conn.cursor()
+    c.execute("SELECT nota_renominacion FROM entradas WHERE nota_renominacion LIKE '%REN-%'")
+    max_num = 0
+    for (nota,) in c.fetchall():
+        if nota:
+            for match in re.findall(r"REN-(\d+)", str(nota)):
+                val = int(match)
+                if val > max_num:
+                    max_num = val
+    return f"REN-{max_num + 1:03d}"
+
 # ==========================================
 # 🚪 PORTADA DE INICIO DE SESIÓN SEPARADA
 # ==========================================
@@ -1055,7 +1067,7 @@ elif st.session_state.rol_sesion == "admin":
 
     elif st.session_state.vista_admin == "renominar":
         st.subheader("🔄 RENOMINAR ENTRADA (CESIÓN O REVENTA)")
-        st.caption("Filtra por evento exacto, ubica la entrada y actualiza los datos manteniendo el mismo código QR y el historial anterior.")
+        st.caption("Filtra por evento exacto, ubica la entrada y actualiza los datos manteniendo el mismo código QR y un enlace correlativo (REN-001) con el registro anterior.")
 
         df_ren = pd.read_sql_query(
             "SELECT codigo, nombre, rut, correo, tipo, estado, evento, caducidad, nota_renominacion FROM entradas ORDER BY fecha_creacion DESC",
@@ -1111,7 +1123,7 @@ elif st.session_state.rol_sesion == "admin":
                     nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
                     nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo)
                     motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"])
-                    detalle_ren = st.text_input("Observación / titular anterior (opcional)", placeholder="Ej: Cedido por Juan Pérez")
+                    detalle_ren = st.text_input("Observación adicional (opcional)", placeholder="Ej: Solicitado por correo")
                     guardar_ren = st.form_submit_button("💾 GUARDAR RENOMINACIÓN", type="primary", use_container_width=True)
 
                 if guardar_ren:
@@ -1124,15 +1136,24 @@ elif st.session_state.rol_sesion == "admin":
                     elif nuevo_correo.strip() and not correo_valido(nuevo_correo.strip()):
                         st.error(f"El correo `{nuevo_correo.strip()}` no tiene un formato válido.")
                     else:
+                        codigo_ren = siguiente_codigo_ren(conn)
+                        fecha_ren = ahora_chile().strftime("%d/%m/%Y %H:%M")
+                        anterior_txt = (
+                            f"ANTERIOR [{codigo_ren}]: {fila_actual['nombre']} | RUT: {fila_actual['rut']} | "
+                            f"Correo: {fila_actual['correo'] or 'Sin correo'} | Pase: {fila_actual['tipo']}"
+                        )
+                        nuevo_txt = (
+                            f"NUEVO [{codigo_ren}]: {nuevo_nombre.strip()} | RUT: {nuevo_rut.strip()} | "
+                            f"Correo: {nuevo_correo.strip() or 'Sin correo'} | Pase: {nuevo_tipo}"
+                        )
                         marca_cambio = (
-                            f"[{ahora_chile().strftime('%d/%m/%Y %H:%M')}] {motivo_ren} "
-                            f"(Evento: '{fila_actual['evento']}'): de '{fila_actual['nombre']}' ({fila_actual['rut']}) "
-                            f"a '{nuevo_nombre.strip()}' ({nuevo_rut.strip()}) por {st.session_state.usuario_actual}"
+                            f"[{codigo_ren} - RENOMINADA] {fecha_ren} | Motivo: {motivo_ren} | "
+                            f"{anterior_txt} ==> {nuevo_txt} | Por: {st.session_state.usuario_actual}"
                         )
                         if detalle_ren.strip():
-                            marca_cambio += f" — {detalle_ren.strip()}"
+                            marca_cambio += f" | Obs: {detalle_ren.strip()}"
                         nota_acumulada = (
-                            f"{fila_actual['nota_renominacion']} | {marca_cambio}"
+                            f"{fila_actual['nota_renominacion']} || {marca_cambio}"
                             if fila_actual["nota_renominacion"]
                             else marca_cambio
                         )
@@ -1142,7 +1163,9 @@ elif st.session_state.rol_sesion == "admin":
                             (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
                         )
                         conn.commit()
-                        st.success(f"Entrada `{codigo_sel}` renombrada a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{fila_actual['evento']}**.")
+                        st.success(
+                            f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()})."
+                        )
                         st.rerun()
 
     elif st.session_state.vista_admin == "lista":

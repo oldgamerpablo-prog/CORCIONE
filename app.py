@@ -639,6 +639,8 @@ if "borrador_qr" not in st.session_state:
     st.session_state.borrador_qr = None
 if "borrador_masivo" not in st.session_state:
     st.session_state.borrador_masivo = None
+if "ren_reset_id" not in st.session_state:
+    st.session_state.ren_reset_id = 0
 
 def reparar_filas_desplazadas(conn):
     c = conn.cursor()
@@ -1248,13 +1250,14 @@ elif st.session_state.rol_sesion == "admin":
                     tipos_pase = ["Early Bird", "Preventa 1", "Preventa 2", "General", "VIP / Backstage", "Lista / Cortesía"]
                     idx_tipo = tipos_pase.index(fila_actual["tipo"]) if fila_actual["tipo"] in tipos_pase else 3
 
-                    with st.form("form_renominar"):
-                        nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]))
-                        nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]))
-                        nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]))
-                        nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo)
-                        motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"])
-                        detalle_ren = st.text_input("Observación adicional (opcional)", placeholder="Ej: Solicitado por correo")
+                    reset_id = st.session_state.ren_reset_id
+                    with st.form(f"form_renominar_{codigo_sel}_{reset_id}"):
+                        nuevo_nombre = st.text_input("Nombre Completo nuevo asistente", value=str(fila_actual["nombre"]), key=f"ren_nom_{codigo_sel}_{reset_id}")
+                        nuevo_rut = st.text_input("RUT / Carnet nuevo asistente", value=str(fila_actual["rut"]), key=f"ren_rut_{codigo_sel}_{reset_id}")
+                        nuevo_correo = st.text_input("Correo Electrónico nuevo asistente", value=str(fila_actual["correo"]), key=f"ren_cor_{codigo_sel}_{reset_id}")
+                        nuevo_tipo = st.selectbox("Tipo de Pase", tipos_pase, index=idx_tipo, key=f"ren_tipo_{codigo_sel}_{reset_id}")
+                        motivo_ren = st.selectbox("Motivo de renominación", ["Cesión", "Reventa"], key=f"ren_mot_{codigo_sel}_{reset_id}")
+                        detalle_ren = st.text_input("Observación adicional (opcional)", value="", placeholder="Ej: Solicitado por correo", key=f"ren_obs_{codigo_sel}_{reset_id}")
                         guardar_ren = st.form_submit_button("💾 GUARDAR RENOMINACIÓN", type="primary", use_container_width=True)
 
                     if guardar_ren:
@@ -1293,6 +1296,7 @@ elif st.session_state.rol_sesion == "admin":
                                 (nuevo_nombre.strip(), nuevo_rut.strip(), nuevo_correo.strip(), nuevo_tipo, nota_acumulada, codigo_sel)
                             )
                             conn.commit()
+                            st.session_state.ren_reset_id += 1
                             st.success(
                                 f"Entrada `{codigo_sel}` renombrada bajo el folio **{codigo_ren}** a **{nuevo_nombre.strip()}** ({nuevo_rut.strip()}) para **{evento_ticket}**."
                             )
